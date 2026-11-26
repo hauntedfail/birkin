@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and publish (e.g. v0.5.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            asset: birkin-darwin-arm64
+            bin: target/release/birkin
+          - os: ubuntu-latest
+            asset: birkin-linux-amd64
+            bin: target/release/birkin
+          - os: windows-latest
+            asset: birkin-windows-amd64.exe
+            bin: target/release/birkin.exe
+    runs-on: ${{ matrix.os }}
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - name: Validate tag and checkout exact tag commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            git fetch --depth=1 --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            git checkout --detach "refs/tags/$TAG^{commit}"
+          fi
+          expected="${TAG#v}"
+          actual="$(awk -F'"' '/^version = "/ { print $2; exit }' Cargo.toml)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Cargo.toml version ($actual) does not match tag ($TAG)" >&2
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release binary
+        shell: bash
+        run: cargo build --release --locked
+      - name: Verify release binary and stage asset
+        shell: bash
+        env:
+          BIN_PATH: ${{ matrix.bin }}
+          ASSET_NAME: ${{ matrix.asset }}
+        run: |
+          set -euo pipefail
+          out="$("./$BIN_PATH" --version)"
+          echo "Built: $out"
+          [[ "$out" == "birkin ${TAG#v}" ]]
+          mkdir -p dist
+          cp "$BIN_PATH" "dist/$ASSET_NAME"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: dist/${{ matrix.asset }}
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Compute and verify SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          cd dist
+          chmod +x birkin-darwin-arm64 birkin-linux-amd64
+          sha256sum birkin-darwin-arm64 birkin-linux-amd64 birkin-windows-amd64.exe > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              dist/birkin-darwin-arm64 \
+              dist/birkin-linux-amd64 \
+              dist/birkin-windows-amd64.exe \
+              dist/SHA256SUMS \
+              --clobber
+          else
+            gh release create "$TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              dist/birkin-darwin-arm64 \
+              dist/birkin-linux-amd64 \
+              dist/birkin-windows-amd64.exe \
+              dist/SHA256SUMS \
+              --verify-tag \
+              --title "Birkin $TAG" \
+              --generate-notes
+          fi
