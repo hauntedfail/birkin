@@ -1,6 +1,6 @@
-"""Append-only, hash-chained receipt ledger bound to git revision and harness digest.
+"""Append-only, hash-chained receipt ledger bound to git revision and spec digest.
 
-Implements AHE experience/decision observability and arXiv:2610.40917 portable disclosure:
+Implements experience/decision observability and portable disclosure:
 receipts are stored outside the repository working tree by default (~/.birkin/ledger/) so
 they never dirty git state and remain independently auditable.
 """
@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from birkin.project_models import ProjectHarnessSpec
+from birkin.project_models import ProjectSpec
 
 DEFAULT_LEDGER_DIR = Path(os.environ.get("BIRKIN_LEDGER_DIR", str(Path.home() / ".birkin" / "ledger")))
 
@@ -28,14 +28,14 @@ def repo_slug(repo_root: Path) -> str:
     return f"{safe_name}-{short_hash}"
 
 
-def resolve_ledger_path(repo_root: Path, spec: ProjectHarnessSpec) -> Path:
+def resolve_ledger_path(repo_root: Path, spec: ProjectSpec) -> Path:
     if spec.telemetry.ledger_path:
         p = Path(spec.telemetry.ledger_path).expanduser()
         return p if p.is_absolute() else (repo_root / p)
     return DEFAULT_LEDGER_DIR / f"{repo_slug(repo_root)}.jsonl"
 
 
-def canonical_harness_sha256(spec: ProjectHarnessSpec) -> str:
+def canonical_spec_sha256(spec: ProjectSpec) -> str:
     payload = json.dumps(spec.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
@@ -143,7 +143,7 @@ def verify_chain(entries: list[dict[str, Any]]) -> tuple[bool, list[str]]:
 
 def append_receipt(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     command: str,
     surface: str,
@@ -187,7 +187,7 @@ def append_receipt(
         "git_head": rev["git_head"],
         "git_dirty": rev["git_dirty"],
         "tree_digest": rev["tree_digest"],
-        "harness_sha256": canonical_harness_sha256(spec),
+        "spec_sha256": canonical_spec_sha256(spec),
         "finding_count": len(finding_items),
         "error_count": sum(1 for item in finding_items if item.get("severity") == "error"),
         "rule_counts": rule_counts,
@@ -205,17 +205,17 @@ def append_receipt(
 
 def verify_receipts_for_current_state(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     required_commands: list[str],
     require_clean: bool = False,
 ) -> dict[str, Any]:
-    """Prove that the exact current revision/tree + harness spec has passing receipts."""
+    """Prove that the exact current revision/tree + Birkin spec has passing receipts."""
     ledger_path = resolve_ledger_path(repo_root, spec)
     entries = read_receipts(ledger_path)
     chain_ok, chain_errors = verify_chain(entries)
     rev = git_revision_state(repo_root, ignore_rel=_relative_ignore(repo_root, ledger_path))
-    harness_sha = canonical_harness_sha256(spec)
+    spec_sha = canonical_spec_sha256(spec)
 
     missing: list[str] = []
     matched: dict[str, dict[str, Any]] = {}
@@ -229,7 +229,7 @@ def verify_receipts_for_current_state(
             "git_head": rev["git_head"],
             "git_dirty": rev["git_dirty"],
             "tree_digest": rev["tree_digest"],
-            "harness_sha256": harness_sha,
+            "spec_sha256": spec_sha,
             "matched": {},
             "missing": required_commands,
         }
@@ -243,7 +243,7 @@ def verify_receipts_for_current_state(
                 continue
             if entry.get("exit_code") != 0 or entry.get("outcome") != "PASS":
                 continue
-            if entry.get("harness_sha256") != harness_sha:
+            if entry.get("spec_sha256") != spec_sha:
                 continue
             if rev["tree_digest"] is not None and entry.get("tree_digest") != rev["tree_digest"]:
                 continue
@@ -270,7 +270,7 @@ def verify_receipts_for_current_state(
         "git_head": rev["git_head"],
         "git_dirty": rev["git_dirty"],
         "tree_digest": rev["tree_digest"],
-        "harness_sha256": harness_sha,
+        "spec_sha256": spec_sha,
         "matched": matched,
         "missing": missing,
     }

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from birkin.guides import audit_guides
-from birkin.project_models import ProjectFinding, ProjectHarnessSpec
+from birkin.project_models import ProjectFinding, ProjectSpec
 from birkin.sensors import run_project_sensors
 from birkin.steer import analyze_telemetry
 
@@ -20,13 +20,13 @@ def _bucket_for_finding(finding: ProjectFinding) -> str:
     if finding.rule in ("KNOWLEDGE_BROKEN_DOC_LINK", "KNOWLEDGE_STALE_DOC_REVIEW", "KNOWLEDGE_MISSING_REQUIRED_DOC"):
         return "doc_rot"
     if finding.rule in (
-        "ORIENTATION_UNTRACKED_HARNESS_FILE",
+        "ORIENTATION_UNTRACKED_SPEC_FILE",
         "ORIENTATION_ENTRY_DOC_BLOATED",
         "ORIENTATION_MISSING_ENTRY_DOC",
         "ADMISSION_CI_LOCAL_DRIFT",
         "ADMISSION_NO_LOCAL_VERIFY_DECLARED",
     ):
-        return "harness_drift"
+        return "spec_drift"
     if finding.category == "architecture":
         return "architecture_debt"
     if finding.category == "entropy":
@@ -36,11 +36,11 @@ def _bucket_for_finding(finding: ProjectFinding) -> str:
 
 def run_gc_scan(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     today: date | None = None,
 ) -> dict[str, Any]:
-    """Scan repository for harness and codebase entropy and group items into cleanup buckets."""
+    """Scan repository for spec and codebase entropy and group items into cleanup buckets."""
     guide_findings = audit_guides(repo_root, spec, today=today)
     sensor_findings, checked_files = run_project_sensors(repo_root, spec)
     telemetry = analyze_telemetry(repo_root, spec)
@@ -53,7 +53,7 @@ def run_gc_scan(
             message=f"Declared rule '{rule_name}' fired 0 times across {telemetry['total_runs']} runs.",
             remediation=(
                 f"Run `birkin eval-rules` to verify '{rule_name}' still detects bad examples, "
-                "or remove it to keep harness overhead minimal."
+                "or remove it to keep rule overhead minimal."
             ),
         )
         for rule_name in telemetry.get("stale_rule_candidates", [])
@@ -62,7 +62,7 @@ def run_gc_scan(
     all_findings = [*guide_findings, *sensor_findings, *dead_rule_findings]
     buckets: dict[str, list[dict[str, Any]]] = {
         "doc_rot": [],
-        "harness_drift": [],
+        "spec_drift": [],
         "architecture_debt": [],
         "dead_rules": [],
         "hygiene": [],

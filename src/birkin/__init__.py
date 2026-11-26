@@ -30,8 +30,8 @@ from birkin.imports_parser import ImportEdge, extract_imports_for_file
 from birkin.ledger import append_receipt, verify_chain, verify_receipts_for_current_state
 from birkin.live import verify_live
 from birkin.models import Finding, HarnessPolicy
-from birkin.project_init import detect_project_spec, render_agent_guide, render_harness_yaml
-from birkin.project_models import ProjectFinding, ProjectHarnessSpec, load_project_harness
+from birkin.project_init import detect_project_spec, render_agent_guide, render_spec_yaml
+from birkin.project_models import ProjectFinding, ProjectSpec, load_project_spec
 from birkin.semantic import evaluate_semantic_rules, run_semantic_review
 from birkin.sensors import evaluate_regex_rules, run_project_sensors, run_verify_commands
 from birkin.static import verify_static
@@ -48,7 +48,7 @@ __all__ = [
     "HarnessPolicy",
     "ImportEdge",
     "ProjectFinding",
-    "ProjectHarnessSpec",
+    "ProjectSpec",
     "analyze_telemetry",
     "append_receipt",
     "audit_guides",
@@ -62,13 +62,13 @@ __all__ = [
     "install_git_pre_commit_hook",
     "install_hermes_plugin",
     "load_policy",
-    "load_project_harness",
+    "load_project_spec",
     "load_yaml_file",
     "main",
     "parse_dotenv_keys",
     "read_env_secret",
     "render_agent_guide",
-    "render_harness_yaml",
+    "render_spec_yaml",
     "run_gc_scan",
     "run_post_edit_hook",
     "run_pre_commit_hook",

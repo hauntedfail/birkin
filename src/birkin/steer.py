@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from birkin.ledger import read_receipts, resolve_ledger_path, verify_chain
-from birkin.project_models import ProjectHarnessSpec
+from birkin.project_models import ProjectSpec
 
 
 def _parse_ts(raw: Any) -> datetime | None:
@@ -24,8 +24,8 @@ def _parse_ts(raw: Any) -> datetime | None:
         return None
 
 
-def analyze_telemetry(repo_root: Path, spec: ProjectHarnessSpec) -> dict[str, Any]:
-    """Analyze the append-only receipt ledger and produce concrete harness steering recommendations."""
+def analyze_telemetry(repo_root: Path, spec: ProjectSpec) -> dict[str, Any]:
+    """Analyze the append-only receipt ledger and produce concrete steering recommendations."""
     ledger_path = resolve_ledger_path(repo_root, spec)
     entries = [e for e in read_receipts(ledger_path) if not e.get("_corrupt")]
     chain_ok, chain_errors = verify_chain(read_receipts(ledger_path))
@@ -44,28 +44,28 @@ def analyze_telemetry(repo_root: Path, spec: ProjectHarnessSpec) -> dict[str, An
     fail_episodes = 0
     resolved_episodes = 0
 
-    # Group outcomes by harness_sha256 in chronological encounter order (AHE Decision Observability)
-    harness_order: list[str] = []
-    harness_stats: dict[str, dict[str, Any]] = {}
+    # Group outcomes by spec_sha256 in chronological encounter order (Decision Observability)
+    spec_order: list[str] = []
+    spec_stats: dict[str, dict[str, Any]] = {}
 
     for entry in entries:
         surface_counts[str(entry.get("surface", "unknown"))] += 1
         ts = _parse_ts(entry.get("recorded_at"))
-        hsha = str(entry.get("harness_sha256") or "unknown")
-        if hsha not in harness_stats:
-            harness_order.append(hsha)
-            harness_stats[hsha] = {
-                "harness_sha256": hsha[:12],
+        ssha = str(entry.get("spec_sha256") or entry.get("harness_sha256") or "unknown")
+        if ssha not in spec_stats:
+            spec_order.append(ssha)
+            spec_stats[ssha] = {
+                "spec_sha256": ssha[:12],
                 "first_seen": entry.get("recorded_at"),
                 "runs": 0,
                 "passes": 0,
                 "total_findings": 0,
             }
-        hs = harness_stats[hsha]
-        hs["runs"] += 1
+        ss = spec_stats[ssha]
+        ss["runs"] += 1
         if entry.get("exit_code") == 0 and entry.get("outcome") == "PASS":
-            hs["passes"] += 1
-        hs["total_findings"] += int(entry.get("finding_count") or 0)
+            ss["passes"] += 1
+        ss["total_findings"] += int(entry.get("finding_count") or 0)
 
         rc = entry.get("rule_counts")
         affected = [str(f) for f in (entry.get("affected_files") or [])]
@@ -128,14 +128,14 @@ def analyze_telemetry(repo_root: Path, spec: ProjectHarnessSpec) -> dict[str, An
     file_hotspots = [{"file": f, "hits": c} for f, c in file_hits.most_common(10)]
 
     evolution: list[dict[str, Any]] = []
-    for hsha in harness_order:
-        hs = harness_stats[hsha]
-        runs = hs["runs"]
+    for ssha in spec_order:
+        ss = spec_stats[ssha]
+        runs = ss["runs"]
         evolution.append(
             {
-                **hs,
-                "pass_rate": round(hs["passes"] / runs, 3) if runs else 0.0,
-                "avg_findings": round(hs["total_findings"] / runs, 2) if runs else 0.0,
+                **ss,
+                "pass_rate": round(ss["passes"] / runs, 3) if runs else 0.0,
+                "avg_findings": round(ss["total_findings"] / runs, 2) if runs else 0.0,
             }
         )
 
@@ -179,6 +179,6 @@ def analyze_telemetry(repo_root: Path, spec: ProjectHarnessSpec) -> dict[str, An
             "rate": round(resolved_episodes / fail_episodes, 3) if fail_episodes else None,
         },
         "stale_rule_candidates": stale_candidates,
-        "harness_evolution": evolution,
+        "spec_evolution": evolution,
         "recommendations": recommendations,
     }

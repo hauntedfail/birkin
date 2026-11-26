@@ -1,4 +1,4 @@
-# Portable Agent Harness Specification (.birkin/harness.yaml)
+# Birkin Project Specification (.birkin/config.yaml)
 # Dogfooded on Birkin itself: enforced across CLI, git pre-commit, CI, Claude Code, and Hermes.
 version: 1
 
@@ -26,7 +26,7 @@ orientation:
   required_docs:
     - README.md
     - birkin-policy.example.yaml
-  require_committed_harness: true
+  require_committed_spec: true
   max_review_age_days: 90
 
 architecture:
@@ -120,7 +120,7 @@ verify:
       cmd: "birkin eval-rules"
       kind: custom
       timeout_seconds: 30
-    - name: harness-check
+    - name: self-check
       cmd: "birkin check --no-receipt"
       kind: custom
       timeout_seconds: 30
@@ -133,7 +133,7 @@ invariants:
     - "src/birkin/sensors.py"
   english_prose_only: true
   prose_exempt_globs:
-    - "tests/test_project_harness.py"
+    - "tests/test_project.py"
   forbid_debug_leftovers: true
   custom_regex_rules:
     - id: no-bare-except

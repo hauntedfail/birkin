@@ -1,4 +1,4 @@
-"""Auto-detection, scaffolding (.birkin/harness.yaml), and compact feedforward guide rendering."""
+"""Auto-detection, scaffolding (.birkin/config.yaml), and compact feedforward guide rendering."""
 
 from __future__ import annotations
 
@@ -12,15 +12,15 @@ from birkin.project_models import (
     ArchitectureSpec,
     InvariantsSpec,
     OrientationSpec,
-    ProjectHarnessSpec,
     ProjectIdentity,
+    ProjectSpec,
     VerifyCommand,
     VerifySpec,
 )
 
 
-def detect_project_spec(repo_root: Path) -> ProjectHarnessSpec:
-    """Inspect a repository and infer a portable starter ProjectHarnessSpec."""
+def detect_project_spec(repo_root: Path) -> ProjectSpec:
+    """Inspect a repository and infer a portable starter ProjectSpec."""
     languages: list[str] = []
     commands: list[VerifyCommand] = []
 
@@ -79,7 +79,7 @@ def detect_project_spec(repo_root: Path) -> ProjectHarnessSpec:
     if not entry_docs:
         entry_docs = ["AGENTS.md"]
 
-    return ProjectHarnessSpec(
+    return ProjectSpec(
         version=1,
         project=ProjectIdentity(name=repo_root.name, languages=languages),  # type: ignore[arg-type]
         orientation=OrientationSpec(entry_docs=entry_docs),
@@ -89,10 +89,10 @@ def detect_project_spec(repo_root: Path) -> ProjectHarnessSpec:
     )
 
 
-def render_harness_yaml(spec: ProjectHarnessSpec) -> str:
-    """Serialize a ProjectHarnessSpec to clean, commented YAML."""
+def render_spec_yaml(spec: ProjectSpec) -> str:
+    """Serialize a ProjectSpec to clean, commented YAML."""
     header = (
-        "# Portable Agent Harness Specification (.birkin/harness.yaml)\n"
+        "# Birkin Project Specification (.birkin/config.yaml)\n"
         "# Enforced mechanically by Birkin across CLI, git hooks, CI, Claude Code, and Hermes.\n"
     )
     data = spec.model_dump(mode="json")
@@ -102,7 +102,7 @@ def render_harness_yaml(spec: ProjectHarnessSpec) -> str:
 
 def render_agent_guide(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     steering: dict[str, Any] | None = None,
 ) -> str:

@@ -23,9 +23,9 @@ from birkin.guides import audit_guides
 from birkin.ledger import append_receipt
 from birkin.project_models import (
     ProjectFinding,
-    find_harness_file,
     find_repo_root,
-    load_project_harness,
+    find_spec_file,
+    load_project_spec,
 )
 from birkin.semantic import run_semantic_review
 from birkin.sensors import run_project_sensors
@@ -38,7 +38,7 @@ def format_llm_feedback(findings: list[ProjectFinding], *, max_items: int = 12) 
     """Format findings as concise, actionable LLM self-correction instructions."""
     if not findings:
         return ""
-    lines = [f"[birkin-harness] {len(findings)} invariant finding(s) — fix before continuing:"]
+    lines = [f"[birkin] {len(findings)} invariant finding(s) — fix before continuing:"]
     for item in findings[:max_items]:
         loc = f"{item.file}:{item.line}" if (item.file and item.line) else (item.file or "<repo>")
         lines.append(f"- [{item.severity.upper()}][{item.rule}] {loc}: {item.message}")
@@ -76,7 +76,7 @@ def run_post_edit_hook(
     *,
     surface: str = "hook",
     include_semantic: bool = False,
-    require_harness: bool = False,
+    require_spec: bool = False,
 ) -> tuple[int, list[ProjectFinding], str]:
     """Run sub-second computational (and optional semantic) sensors on edited file(s)."""
     if not file_paths:
@@ -84,11 +84,11 @@ def run_post_edit_hook(
 
     first = file_paths[0].resolve()
     repo_root = find_repo_root(first)
-    if find_harness_file(repo_root) is None and not require_harness:
+    if find_spec_file(repo_root) is None and not require_spec:
         return EXIT_PASS, [], ""
 
     t0 = time.monotonic()
-    spec, _ = load_project_harness(repo_root)
+    spec, _ = load_project_spec(repo_root)
     findings, checked_rel = run_project_sensors(repo_root, spec, files=file_paths)
 
     if include_semantic and spec.semantic.enabled and spec.semantic.rules:
@@ -116,13 +116,13 @@ def run_post_edit_hook(
 
 
 def run_pre_commit_hook(repo_root: Path) -> tuple[int, list[ProjectFinding], str]:
-    """Check staged files and modified docs/harness before git commit."""
+    """Check staged files and modified docs/config before git commit."""
     resolved = repo_root.resolve()
-    if find_harness_file(resolved) is None:
+    if find_spec_file(resolved) is None:
         return EXIT_PASS, [], ""
 
     t0 = time.monotonic()
-    spec, _ = load_project_harness(resolved)
+    spec, _ = load_project_spec(resolved)
     proc = subprocess.run(
         ["git", "-C", str(resolved), "diff", "--cached", "--name-only", "--diff-filter=ACMR"],
         capture_output=True,
@@ -249,9 +249,9 @@ def install_claude_hook(settings_path: Path) -> dict[str, Any]:
 
 def _hermes_plugin_yaml() -> str:
     return (
-        "name: birkin-harness\n"
-        'version: "0.3.0"\n'
-        'description: "Real-time Birkin computational harness feedback on write_file and patch edits."\n'
+        "name: birkin\n"
+        'version: "0.3.1"\n'
+        'description: "Real-time Birkin computational feedback on write_file and patch edits."\n'
         "author: hauntedfail\n"
         "kind: standalone\n"
         "provides_hooks:\n"
@@ -261,7 +261,7 @@ def _hermes_plugin_yaml() -> str:
 
 def _hermes_plugin_init_py(birkin_src_dir: Path) -> str:
     src_str = str(birkin_src_dir.resolve())
-    return f'''"""Hermes Agent native plugin for real-time Birkin harness feedback."""
+    return f'''"""Hermes Agent native plugin for real-time Birkin edit feedback."""
 
 from __future__ import annotations
 
@@ -292,7 +292,7 @@ def _extract_path(args: Any) -> Path | None:
 
 
 def transform_tool_result(tool_name: str = "", args: Any = None, **kwargs: Any) -> str | None:
-    """Append concise Birkin harness remediation feedback after file edits inside harnessed repos."""
+    """Append concise Birkin remediation feedback after file edits inside configured repos."""
     if tool_name not in _EDIT_TOOLS:
         return None
     target = _extract_path(args)
@@ -309,13 +309,13 @@ def transform_tool_result(tool_name: str = "", args: Any = None, **kwargs: Any) 
             try:
                 parsed = json.loads(raw_result)
                 if isinstance(parsed, dict):
-                    parsed["birkin_harness_feedback"] = feedback
+                    parsed["birkin_feedback"] = feedback
                     return json.dumps(parsed, ensure_ascii=False)
             except ValueError:
                 return raw_result + "\\n\\n" + feedback
         return None
     except Exception:
-        # Never break core tool execution if harness evaluation fails unexpectedly.
+        # Never break core tool execution if sensor evaluation fails unexpectedly.
         return None
 
 
@@ -325,9 +325,9 @@ def register(ctx: Any) -> None:
 
 
 def install_hermes_plugin(plugins_dir: Path, *, birkin_src_dir: Path | None = None) -> dict[str, Any]:
-    """Install the native Hermes plugin `birkin-harness` into plugins_dir."""
+    """Install the native Hermes plugin `birkin` into plugins_dir."""
     src_dir = birkin_src_dir or Path(__file__).resolve().parents[1]
-    plugin_dir = plugins_dir / "birkin-harness"
+    plugin_dir = plugins_dir / "birkin"
     plugin_dir.mkdir(parents=True, exist_ok=True)
     (plugin_dir / "plugin.yaml").write_text(_hermes_plugin_yaml(), encoding="utf-8")
     (plugin_dir / "__init__.py").write_text(_hermes_plugin_init_py(src_dir), encoding="utf-8")

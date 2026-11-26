@@ -1,4 +1,4 @@
-"""Unit and integration tests for Birkin's project-universal harness engineering engine."""
+"""Unit and integration tests for Birkin's project-universal verification engine."""
 
 from __future__ import annotations
 
@@ -11,28 +11,28 @@ from pydantic import ValidationError
 
 from birkin.guides import audit_guides, build_readiness_scorecard
 from birkin.imports_parser import extract_imports_for_file
-from birkin.project_init import detect_project_spec, render_agent_guide, render_harness_yaml
+from birkin.project_init import detect_project_spec, render_agent_guide, render_spec_yaml
 from birkin.project_models import (
     ArchitectureSpec,
     ForbiddenImportRule,
     InvariantsSpec,
     LayerSpec,
     OrientationSpec,
-    ProjectHarnessSpec,
+    ProjectSpec,
     RegexRule,
     VerifyCommand,
     VerifySpec,
-    load_project_harness,
+    load_project_spec,
 )
 from birkin.sensors import evaluate_regex_rules, run_project_sensors
 
 
-def test_project_harness_spec_rejects_unknown_keys_fail_closed(tmp_path: Path) -> None:
-    harness = tmp_path / ".birkin" / "harness.yaml"
-    harness.parent.mkdir(parents=True)
-    harness.write_text("version: 1\nunknown_typo_section:\n  foo: bar\n", encoding="utf-8")
+def test_project_spec_rejects_unknown_keys_fail_closed(tmp_path: Path) -> None:
+    cfg = tmp_path / ".birkin" / "config.yaml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text("version: 1\nunknown_typo_section:\n  foo: bar\n", encoding="utf-8")
     with pytest.raises(ValidationError):
-        load_project_harness(tmp_path)
+        load_project_spec(tmp_path)
 
 
 def test_imports_parser_supports_python_go_rust_typescript(tmp_path: Path) -> None:
@@ -91,7 +91,7 @@ def test_architecture_layer_dag_catches_upward_violations_across_languages(tmp_p
         encoding="utf-8",
     )
 
-    spec = ProjectHarnessSpec(
+    spec = ProjectSpec(
         architecture=ArchitectureSpec(
             layers=[
                 LayerSpec(name="domain", paths=["internal/domain", "internal/domain/**"], allowed_dependencies=[]),
@@ -128,7 +128,7 @@ def test_sensors_detect_secrets_debug_prose_file_size_and_custom_regex(tmp_path:
     big_py = tmp_path / "src" / "big.py"
     big_py.write_text("x = 1\n" * 25, encoding="utf-8")
 
-    spec = ProjectHarnessSpec(
+    spec = ProjectSpec(
         architecture=ArchitectureSpec(max_file_lines=20),
         invariants=InvariantsSpec(
             forbid_secrets=True,
@@ -158,7 +158,7 @@ def test_sensors_detect_secrets_debug_prose_file_size_and_custom_regex(tmp_path:
 
 
 def test_evaluate_regex_rules_detects_false_positive_and_false_negative() -> None:
-    good_spec = ProjectHarnessSpec(
+    good_spec = ProjectSpec(
         invariants=InvariantsSpec(
             custom_regex_rules=[
                 RegexRule(
@@ -174,7 +174,7 @@ def test_evaluate_regex_rules_detects_false_positive_and_false_negative() -> Non
     )
     assert evaluate_regex_rules(good_spec)["status"] == "PASS"
 
-    broken_spec = ProjectHarnessSpec(
+    broken_spec = ProjectSpec(
         invariants=InvariantsSpec(
             custom_regex_rules=[
                 RegexRule(
@@ -213,14 +213,14 @@ def test_guides_audit_checks_links_staleness_bloat_tracking_and_ci_parity(tmp_pa
         encoding="utf-8",
     )
 
-    spec = ProjectHarnessSpec(
+    spec = ProjectSpec(
         orientation=OrientationSpec(max_entry_doc_lines=10, max_review_age_days=90),
         verify=VerifySpec(commands=[VerifyCommand(name="test", cmd="pytest -v", kind="test")]),
     )
     findings = audit_guides(tmp_path, spec, today=date(2026, 11, 26))
     rules = {f.rule for f in findings}
     assert "ORIENTATION_ENTRY_DOC_BLOATED" in rules
-    assert "ORIENTATION_UNTRACKED_HARNESS_FILE" in rules
+    assert "ORIENTATION_UNTRACKED_SPEC_FILE" in rules
     assert "KNOWLEDGE_BROKEN_DOC_LINK" in rules
     assert "KNOWLEDGE_STALE_DOC_REVIEW" in rules
     assert "ADMISSION_CI_LOCAL_DRIFT" in rules
@@ -241,8 +241,9 @@ def test_detect_project_spec_and_guide_rendering(tmp_path: Path) -> None:
     assert any("go test" in c.cmd for c in spec.verify.commands)
     assert any("cargo test" in c.cmd for c in spec.verify.commands)
 
-    yaml_text = render_harness_yaml(spec)
+    yaml_text = render_spec_yaml(spec)
     assert "version: 1" in yaml_text
+    assert ".birkin/config.yaml" in yaml_text
     guide_text = render_agent_guide(tmp_path, spec)
     assert "Birkin Feedforward Guide" in guide_text
     assert "go test ./..." in guide_text

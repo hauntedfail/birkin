@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from birkin.imports_parser import _detect_go_module, extract_imports_for_file
-from birkin.project_models import LayerSpec, ProjectFinding, ProjectHarnessSpec
+from birkin.project_models import LayerSpec, ProjectFinding, ProjectSpec
 
 _SECRET_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("PRIVATE_KEY_HEADER", re.compile(r"-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----")),
@@ -81,7 +81,7 @@ def _layer_for_path(rel_posix: str, layers: list[LayerSpec]) -> LayerSpec | None
 
 def collect_target_files(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     files: list[Path] | None = None,
 ) -> list[Path]:
     """Collect non-excluded files in repo_root (or filter explicit file list)."""
@@ -134,7 +134,7 @@ def _is_comment_line(suffix: str, line: str) -> bool:
 
 def run_project_sensors(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     files: list[Path] | None = None,
 ) -> tuple[list[ProjectFinding], list[str]]:
@@ -345,9 +345,9 @@ def run_project_sensors(
 
 def run_verify_commands(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
 ) -> tuple[list[ProjectFinding], list[dict[str, Any]]]:
-    """Run all canonical verify.commands declared in .birkin/harness.yaml."""
+    """Run all canonical verify.commands declared in .birkin/config.yaml."""
     findings: list[ProjectFinding] = []
     results: list[dict[str, Any]] = []
 
@@ -413,7 +413,7 @@ def run_verify_commands(
     return findings, results
 
 
-def evaluate_regex_rules(spec: ProjectHarnessSpec) -> dict[str, Any]:
+def evaluate_regex_rules(spec: ProjectSpec) -> dict[str, Any]:
     """Proof-of-Life calibration of custom regex rules against their examples_pass/examples_fail."""
     report: list[dict[str, Any]] = []
     all_ok = True

@@ -23,28 +23,28 @@ from birkin.hooks import (
 )
 from birkin.ledger import (
     append_receipt,
-    canonical_harness_sha256,
+    canonical_spec_sha256,
     read_receipts,
     resolve_ledger_path,
     verify_receipts_for_current_state,
 )
-from birkin.project_init import detect_project_spec, render_agent_guide, render_harness_yaml
+from birkin.project_init import detect_project_spec, render_agent_guide, render_spec_yaml
 from birkin.project_models import (
     ProjectFinding,
-    ProjectHarnessSpec,
-    find_harness_file,
+    ProjectSpec,
     find_repo_root,
-    load_project_harness,
+    find_spec_file,
+    load_project_spec,
 )
 from birkin.semantic import evaluate_semantic_rules, run_semantic_review
 from birkin.sensors import evaluate_regex_rules, run_project_sensors, run_verify_commands
 from birkin.steer import analyze_telemetry
 
 
-def _load_or_detect(path: Path, explicit_harness: Path | None = None) -> tuple[Path, ProjectHarnessSpec, Path | None]:
+def _load_or_detect(path: Path, explicit_spec: Path | None = None) -> tuple[Path, ProjectSpec, Path | None]:
     repo_root = find_repo_root(path)
-    if explicit_harness is not None or find_harness_file(repo_root) is not None:
-        spec, spec_path = load_project_harness(repo_root, explicit_path=explicit_harness)
+    if explicit_spec is not None or find_spec_file(repo_root) is not None:
+        spec, spec_path = load_project_spec(repo_root, explicit_path=explicit_spec)
         return repo_root, spec, spec_path
     return repo_root, detect_project_spec(repo_root), None
 
@@ -68,12 +68,12 @@ def _format_findings(findings: list[dict[str, Any]]) -> list[str]:
 def handle_init(args: argparse.Namespace) -> int:
     repo_root = find_repo_root(args.path)
     spec = detect_project_spec(repo_root)
-    rendered = render_harness_yaml(spec)
-    target = repo_root / ".birkin" / "harness.yaml"
+    rendered = render_spec_yaml(spec)
+    target = repo_root / ".birkin" / "config.yaml"
 
     if args.write:
         if target.exists() and not args.force:
-            err = f"Harness spec already exists at {target} (pass --force to overwrite)"
+            err = f"Birkin spec already exists at {target} (pass --force to overwrite)"
             _emit({"status": "ERROR", "error": err}, as_json=args.as_json, human=f"ERROR: {err}")
             return EXIT_TOOL_ERROR
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +99,7 @@ def handle_init(args: argparse.Namespace) -> int:
 
 
 def handle_guide(args: argparse.Namespace) -> int:
-    repo_root, spec, _ = _load_or_detect(args.path, args.harness)
+    repo_root, spec, _ = _load_or_detect(args.path, args.spec)
     telemetry = analyze_telemetry(repo_root, spec)
     guide = render_agent_guide(repo_root, spec, steering=telemetry)
     if args.as_json:
@@ -111,7 +111,7 @@ def handle_guide(args: argparse.Namespace) -> int:
 
 def handle_audit(args: argparse.Namespace) -> int:
     t0 = time.monotonic()
-    repo_root, spec, spec_path = _load_or_detect(args.path, args.harness)
+    repo_root, spec, spec_path = _load_or_detect(args.path, args.spec)
     guide_findings = audit_guides(repo_root, spec)
     sensor_findings, checked = run_project_sensors(repo_root, spec)
     ledger_entries = read_receipts(resolve_ledger_path(repo_root, spec))
@@ -126,8 +126,8 @@ def handle_audit(args: argparse.Namespace) -> int:
         "command": "audit",
         "project": spec.project.name,
         "repo": str(repo_root),
-        "harness_spec": str(spec_path) if spec_path else None,
-        "harness_sha256": canonical_harness_sha256(spec),
+        "spec_path": str(spec_path) if spec_path else None,
+        "spec_sha256": canonical_spec_sha256(spec),
         "status": "FAIL" if has_errors else "PASS",
         "exit_code": exit_code,
         "duration_ms": dur_ms,
@@ -138,7 +138,7 @@ def handle_audit(args: argparse.Namespace) -> int:
 
     lines = [
         f"birkin audit ({spec.project.name}): status={report['status']} files={len(checked)} ({dur_ms}ms)",
-        f"  harness_spec: {report['harness_spec'] or '(auto-inferred; run `birkin init --write`)'}",
+        f"  spec_path: {report['spec_path'] or '(auto-inferred; run `birkin init --write`)'}",
     ]
     for axis, info in scorecard.items():
         lines.append(f"  [{axis:13s}] {info['status']}")
@@ -151,7 +151,7 @@ def handle_audit(args: argparse.Namespace) -> int:
 
 def handle_check(args: argparse.Namespace) -> int:
     t0 = time.monotonic()
-    repo_root, spec, spec_path = _load_or_detect(args.path, args.harness)
+    repo_root, spec, spec_path = _load_or_detect(args.path, args.spec)
     target_files = [Path(f) for f in args.files] if args.files else None
 
     findings: list[ProjectFinding] = []
@@ -204,7 +204,7 @@ def handle_check(args: argparse.Namespace) -> int:
         "command": "check",
         "project": spec.project.name,
         "repo": str(repo_root),
-        "harness_spec": str(spec_path) if spec_path else None,
+        "spec_path": str(spec_path) if spec_path else None,
         "status": "FAIL" if has_errors else "PASS",
         "exit_code": exit_code,
         "duration_ms": dur_ms,
@@ -229,7 +229,7 @@ def handle_check(args: argparse.Namespace) -> int:
 
 def handle_review(args: argparse.Namespace) -> int:
     t0 = time.monotonic()
-    repo_root, spec, _ = _load_or_detect(args.path, args.harness)
+    repo_root, spec, _ = _load_or_detect(args.path, args.spec)
     target_files = [Path(f) for f in args.files] if args.files else None
     code, findings, meta = run_semantic_review(
         repo_root,
@@ -274,7 +274,7 @@ def handle_review(args: argparse.Namespace) -> int:
 
 
 def handle_eval_rules(args: argparse.Namespace) -> int:
-    repo_root, spec, _ = _load_or_detect(args.path, args.harness)
+    repo_root, spec, _ = _load_or_detect(args.path, args.spec)
     regex_eval = evaluate_regex_rules(spec)
     sem_eval = evaluate_semantic_rules(spec, live=args.live)
     all_rules = [*regex_eval["rules"], *sem_eval["rules"]]
@@ -313,7 +313,7 @@ def handle_hook(args: argparse.Namespace) -> int:
                 paths,
                 surface="claude-hook",
                 include_semantic=args.semantic,
-                require_harness=False,
+                require_spec=False,
             )
             if findings and feedback:
                 print(
@@ -333,7 +333,7 @@ def handle_hook(args: argparse.Namespace) -> int:
             paths,
             surface=args.surface,
             include_semantic=args.semantic,
-            require_harness=args.require_harness,
+            require_spec=args.require_spec,
         )
         if feedback:
             print(feedback, file=sys.stderr if code != EXIT_PASS else sys.stdout)
@@ -358,7 +358,7 @@ def handle_hook(args: argparse.Namespace) -> int:
         ok = res["status"] == "PASS"
         if not ok:
             print(
-                f"[birkin-harness] Completion blocked: missing passing receipts for exact current state: "
+                f"[birkin] Completion blocked: missing passing receipts for exact current state: "
                 f"{res['missing']} (chain_ok={res['chain_ok']}). Run `birkin check --run-verify` first.",
                 file=sys.stderr,
             )
@@ -395,7 +395,7 @@ def handle_install_hooks(args: argparse.Namespace) -> int:
 
 
 def handle_receipt(args: argparse.Namespace) -> int:
-    repo_root, spec, _ = _load_or_detect(args.path, args.harness)
+    repo_root, spec, _ = _load_or_detect(args.path, args.spec)
     reqs = [c.strip() for c in args.require.split(",") if c.strip()]
     res = verify_receipts_for_current_state(
         repo_root,
@@ -415,7 +415,7 @@ def handle_receipt(args: argparse.Namespace) -> int:
 
 
 def handle_steer(args: argparse.Namespace) -> int:
-    repo_root, spec, _ = _load_or_detect(args.path, args.harness)
+    repo_root, spec, _ = _load_or_detect(args.path, args.spec)
     report = analyze_telemetry(repo_root, spec)
     lines = [
         f"birkin steer ({spec.project.name}): runs={report['total_runs']} "
@@ -431,11 +431,11 @@ def handle_steer(args: argparse.Namespace) -> int:
         lines.append("  thrash alerts:")
         for a in report["thrash_alerts"]:
             lines.append(f"    - {a['file']} :: {a['rule']} ({a['hits_in_window']}x in {a['window_minutes']}m)")
-    if report["harness_evolution"]:
-        lines.append("  harness evolution (by harness_sha256):")
-        for ev in report["harness_evolution"][-5:]:
+    if report["spec_evolution"]:
+        lines.append("  spec evolution (by spec_sha256):")
+        for ev in report["spec_evolution"][-5:]:
             lines.append(
-                f"    - {ev['harness_sha256']}: runs={ev['runs']} pass_rate={ev['pass_rate']} avg_findings={ev['avg_findings']}"
+                f"    - {ev['spec_sha256']}: runs={ev['runs']} pass_rate={ev['pass_rate']} avg_findings={ev['avg_findings']}"
             )
     if report["recommendations"]:
         lines.append("  recommendations:")
@@ -446,7 +446,7 @@ def handle_steer(args: argparse.Namespace) -> int:
 
 
 def handle_gc(args: argparse.Namespace) -> int:
-    repo_root, spec, _ = _load_or_detect(args.path, args.harness)
+    repo_root, spec, _ = _load_or_detect(args.path, args.spec)
     report = run_gc_scan(repo_root, spec)
     lines = [
         f"birkin gc ({spec.project.name}): status={report['status']} "
@@ -462,20 +462,20 @@ def handle_gc(args: argparse.Namespace) -> int:
 
 
 def register_project_subcommands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
-    """Attach all project-universal harness engineering subcommands to the CLI parser."""
+    """Attach all project-universal Birkin subcommands to the CLI parser."""
 
     def add_project_common(sp: argparse.ArgumentParser) -> None:
         sp.add_argument("path", nargs="?", type=Path, default=Path("."))
-        sp.add_argument("--harness", type=Path, default=None, help="Explicit .birkin/harness.yaml path")
+        sp.add_argument("--spec", type=Path, default=None, help="Explicit .birkin/config.yaml path")
         sp.add_argument("--json", action="store_true", dest="as_json")
 
-    p_init = sub.add_parser("init", help="Auto-detect repo stack and preview or write .birkin/harness.yaml")
+    p_init = sub.add_parser("init", help="Auto-detect repo stack and preview or write .birkin/config.yaml")
     p_init.add_argument("path", nargs="?", type=Path, default=Path("."))
-    p_init.add_argument("--write", action="store_true", help="Write .birkin/harness.yaml to disk")
-    p_init.add_argument("--force", action="store_true", help="Overwrite an existing .birkin/harness.yaml")
+    p_init.add_argument("--write", action="store_true", help="Write .birkin/config.yaml to disk")
+    p_init.add_argument("--force", action="store_true", help="Overwrite an existing .birkin/config.yaml")
     p_init.add_argument("--json", action="store_true", dest="as_json")
 
-    p_guide = sub.add_parser("guide", help="Emit compact feedforward harness brief for coding agents")
+    p_guide = sub.add_parser("guide", help="Emit compact feedforward brief for coding agents")
     add_project_common(p_guide)
 
     p_audit = sub.add_parser("audit", help="Run 6-axis harness engineering readiness audit on any repo")
@@ -508,7 +508,7 @@ def register_project_subcommands(sub: argparse._SubParsersAction[argparse.Argume
     p_hpost.add_argument("--claude-stdin", action="store_true", help="Read Claude Code PostToolUse JSON from stdin")
     p_hpost.add_argument("--semantic", action="store_true", help="Also run semantic rules if enabled")
     p_hpost.add_argument("--block-on-error", action="store_true", help="Exit non-zero on error findings")
-    p_hpost.add_argument("--require-harness", action="store_true", help="Run even when no .birkin/harness.yaml exists")
+    p_hpost.add_argument("--require-spec", action="store_true", help="Run even when no .birkin/config.yaml exists")
     p_hpost.add_argument("--surface", default="hook")
 
     p_hpre = hsub.add_parser("pre-commit", help="Git pre-commit hook over staged files")

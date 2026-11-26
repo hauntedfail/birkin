@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "birkin"
-version = "0.3.0"
+version = "0.3.1"
 description = "Portable Harness Engineering Engine (feedforward guides, multi-language architectural fitness sensors, semantic predicates, hash-chained receipts, AHE telemetry) and Hermes runtime verifier."
 readme = "README.md"
 requires-python = ">=3.11"

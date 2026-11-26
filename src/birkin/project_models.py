@@ -1,4 +1,4 @@
-"""Strict Pydantic models for project-level portable harness specifications (.birkin/harness.yaml)."""
+"""Strict Pydantic models for project-level Birkin specifications (.birkin/config.yaml)."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ class OrientationSpec(_StrictModel):
     max_entry_doc_lines: int = 180
     verify_markdown_links: bool = True
     required_docs: list[str] = Field(default_factory=list)
-    require_committed_harness: bool = True
+    require_committed_spec: bool = True
     max_review_age_days: int = 90
 
     @field_validator("max_entry_doc_lines", "max_review_age_days")
@@ -174,8 +174,8 @@ class TelemetrySpec(_StrictModel):
     stale_rule_min_runs: int = 20
 
 
-class ProjectHarnessSpec(_StrictModel):
-    """Portable per-repository harness specification (.birkin/harness.yaml)."""
+class ProjectSpec(_StrictModel):
+    """Portable per-repository Birkin specification (.birkin/config.yaml)."""
 
     version: int = 1
     project: ProjectIdentity = Field(default_factory=ProjectIdentity)
@@ -187,12 +187,12 @@ class ProjectHarnessSpec(_StrictModel):
     telemetry: TelemetrySpec = Field(default_factory=TelemetrySpec)
 
 
-HARNESS_REL_PATHS = (".birkin/harness.yaml", ".birkin/harness.yml", "birkin.yaml")
+SPEC_REL_PATHS = (".birkin/config.yaml", ".birkin/config.yml", "birkin.yaml")
 
 
-def find_harness_file(repo_root: Path) -> Path | None:
-    """Return the first recognized harness spec path inside repo_root, if present."""
-    for rel in HARNESS_REL_PATHS:
+def find_spec_file(repo_root: Path) -> Path | None:
+    """Return the first recognized Birkin spec path inside repo_root, if present."""
+    for rel in SPEC_REL_PATHS:
         candidate = repo_root / rel
         if candidate.is_file():
             return candidate
@@ -200,33 +200,33 @@ def find_harness_file(repo_root: Path) -> Path | None:
 
 
 def find_repo_root(start: Path) -> Path:
-    """Walk upward from start to find a directory containing .birkin/harness.yaml or .git."""
+    """Walk upward from start to find a directory containing .birkin/config.yaml or .git."""
     cur = start.resolve()
     if cur.is_file():
         cur = cur.parent
     git_fallback: Path | None = None
     for parent in (cur, *cur.parents):
-        if find_harness_file(parent) is not None:
+        if find_spec_file(parent) is not None:
             return parent
         if git_fallback is None and (parent / ".git").exists():
             git_fallback = parent
     return git_fallback or cur
 
 
-def load_project_harness(repo_root: Path, explicit_path: Path | None = None) -> tuple[ProjectHarnessSpec, Path | None]:
-    """Load strict ProjectHarnessSpec from explicit_path or repo_root, failing closed on invalid YAML/keys."""
-    spec_path = explicit_path or find_harness_file(repo_root)
+def load_project_spec(repo_root: Path, explicit_path: Path | None = None) -> tuple[ProjectSpec, Path | None]:
+    """Load strict ProjectSpec from explicit_path or repo_root, failing closed on invalid YAML/keys."""
+    spec_path = explicit_path or find_spec_file(repo_root)
     if explicit_path is not None and not explicit_path.is_file():
-        raise FileNotFoundError(f"Explicit harness spec not found: {explicit_path}")
+        raise FileNotFoundError(f"Explicit Birkin spec not found: {explicit_path}")
     if spec_path is None:
-        return ProjectHarnessSpec(project=ProjectIdentity(name=repo_root.name)), None
+        return ProjectSpec(project=ProjectIdentity(name=repo_root.name)), None
 
     raw = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
     if raw is None:
         raw = {}
     if not isinstance(raw, dict):
-        raise ValueError(f"Harness spec must be a YAML mapping: {spec_path}")
-    spec = ProjectHarnessSpec.model_validate(raw)
+        raise ValueError(f"Birkin spec must be a YAML mapping: {spec_path}")
+    spec = ProjectSpec.model_validate(raw)
 
     # Merge any rule files under semantic.rules_dir
     rules_dir = repo_root / spec.semantic.rules_dir

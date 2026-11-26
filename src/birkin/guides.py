@@ -10,7 +10,7 @@ from typing import Any
 
 import yaml
 
-from birkin.project_models import ProjectFinding, ProjectHarnessSpec, find_harness_file
+from birkin.project_models import ProjectFinding, ProjectSpec, find_spec_file
 
 _MD_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)\s]+)(?:\s+[\"'][^\"']*[\"'])?\)")
 _LAST_REVIEWED_RE = re.compile(r"(?i)last\s+reviewed\s*:\s*(\d{4}-\d{2}-\d{2})")
@@ -46,7 +46,7 @@ def _strip_fenced_code(md_text: str) -> list[tuple[int, str]]:
     return out
 
 
-def _collect_doc_files(repo_root: Path, spec: ProjectHarnessSpec) -> list[Path]:
+def _collect_doc_files(repo_root: Path, spec: ProjectSpec) -> list[Path]:
     seen: set[Path] = set()
     files: list[Path] = []
     for name in (*spec.orientation.entry_docs, "CLAUDE.md", "README.md", *spec.orientation.required_docs):
@@ -148,7 +148,7 @@ def _is_verify_like_ci_cmd(cmd: str) -> bool:
 
 def audit_guides(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     today: date | None = None,
 ) -> list[ProjectFinding]:
@@ -196,31 +196,31 @@ def audit_guides(
                     ),
                 )
             )
-        if spec.orientation.require_committed_harness and tracked is not None and entry_rel not in tracked:
+        if spec.orientation.require_committed_spec and tracked is not None and entry_rel not in tracked:
             findings.append(
                 ProjectFinding(
-                    rule="ORIENTATION_UNTRACKED_HARNESS_FILE",
+                    rule="ORIENTATION_UNTRACKED_SPEC_FILE",
                     category="orientation",
                     severity="warning",
                     file=entry_rel,
-                    message=f"Harness entry guide '{entry_rel}' exists on disk but is untracked in git.",
+                    message=f"Entry guide '{entry_rel}' exists on disk but is untracked in git.",
                     remediation=f"Commit '{entry_rel}' so CI and all agents share the same feedforward guide.",
                 )
             )
 
-    # Check harness file git tracking
-    harness_path = find_harness_file(repo_root)
-    if spec.orientation.require_committed_harness and harness_path is not None and tracked is not None:
-        h_rel = harness_path.relative_to(repo_root).as_posix()
-        if h_rel not in tracked:
+    # Check Birkin spec file git tracking
+    spec_path = find_spec_file(repo_root)
+    if spec.orientation.require_committed_spec and spec_path is not None and tracked is not None:
+        s_rel = spec_path.relative_to(repo_root).as_posix()
+        if s_rel not in tracked:
             findings.append(
                 ProjectFinding(
-                    rule="ORIENTATION_UNTRACKED_HARNESS_FILE",
+                    rule="ORIENTATION_UNTRACKED_SPEC_FILE",
                     category="orientation",
                     severity="warning",
-                    file=h_rel,
-                    message=f"Harness spec '{h_rel}' exists on disk but is untracked in git.",
-                    remediation=f"Commit '{h_rel}' so harness invariants are versioned and CI-enforced.",
+                    file=s_rel,
+                    message=f"Birkin spec '{s_rel}' exists on disk but is untracked in git.",
+                    remediation=f"Commit '{s_rel}' so repository invariants are versioned and CI-enforced.",
                 )
             )
 
@@ -300,10 +300,10 @@ def audit_guides(
                     severity="warning",
                     file=verify_like[0][0],
                     message=(
-                        f"CI defines {len(verify_like)} verification command(s) but .birkin/harness.yaml "
+                        f"CI defines {len(verify_like)} verification command(s) but .birkin/config.yaml "
                         "declares no verify.commands."
                     ),
-                    remediation="Declare canonical verify.commands in .birkin/harness.yaml mirroring CI.",
+                    remediation="Declare canonical verify.commands in .birkin/config.yaml mirroring CI.",
                     details={"ci_commands": [cmd for _, cmd in verify_like]},
                 )
             )
@@ -323,7 +323,7 @@ def audit_guides(
                             message=f"CI command `{ci_cmd}` in {wf} is not covered by verify.commands.",
                             remediation=(
                                 f"Add `{ci_cmd}` (or an equivalent command) to verify.commands in "
-                                ".birkin/harness.yaml so local and CI admission paths stay identical."
+                                ".birkin/config.yaml so local and CI admission paths stay identical."
                             ),
                         )
                     )
@@ -334,13 +334,13 @@ def audit_guides(
 
 def build_readiness_scorecard(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     guide_findings: list[ProjectFinding],
     sensor_findings: list[ProjectFinding],
     ledger_entries: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """Build a 6-axis research-backed harness readiness scorecard (no arbitrary scores)."""
-    harness_file = find_harness_file(repo_root)
+    """Build a 6-axis research-backed readiness scorecard (no arbitrary scores)."""
+    spec_file = find_spec_file(repo_root)
     all_findings = [*guide_findings, *sensor_findings]
 
     def _by_cat(cat: str) -> list[ProjectFinding]:
@@ -368,8 +368,8 @@ def build_readiness_scorecard(
 
     return {
         "orientation": {
-            "status": _grade(has_entry_doc and harness_file is not None, orient_f),
-            "harness_spec": harness_file.relative_to(repo_root).as_posix() if harness_file else None,
+            "status": _grade(has_entry_doc and spec_file is not None, orient_f),
+            "spec_path": spec_file.relative_to(repo_root).as_posix() if spec_file else None,
             "entry_docs_present": [d for d in spec.orientation.entry_docs if (repo_root / d).is_file()],
             "findings": len(orient_f),
         },

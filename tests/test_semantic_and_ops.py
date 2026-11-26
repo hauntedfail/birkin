@@ -26,7 +26,7 @@ from birkin.ledger import (
 )
 from birkin.project_models import (
     InvariantsSpec,
-    ProjectHarnessSpec,
+    ProjectSpec,
     RegexRule,
     SemanticRule,
     SemanticSpec,
@@ -59,7 +59,7 @@ def test_semantic_review_verdicts_and_fail_closed_provider_errors(tmp_path: Path
         examples_pass=["def real(): return 1"],
         examples_fail=["class W: def run(self): return real()"],
     )
-    spec = ProjectHarnessSpec(
+    spec = ProjectSpec(
         semantic=SemanticSpec(enabled=True, model="test-model", rules=[rule_block])
     )
 
@@ -153,7 +153,7 @@ def test_receipt_ledger_hash_chain_tamper_detection_and_revision_binding(tmp_pat
     subprocess.run(["git", "-C", str(tmp_path), "commit", "-q", "-m", "init"], check=True)
 
     ledger_file = tmp_path / ".ledger.jsonl"
-    spec = ProjectHarnessSpec(telemetry=TelemetrySpec(ledger_path=str(ledger_file)))
+    spec = ProjectSpec(telemetry=TelemetrySpec(ledger_path=str(ledger_file)))
 
     append_receipt(
         tmp_path, spec, command="check", surface="cli", outcome="PASS", exit_code=0, duration_ms=12
@@ -186,7 +186,7 @@ def test_receipt_ledger_hash_chain_tamper_detection_and_revision_binding(tmp_pat
 
 def test_ahe_telemetry_detects_thrashing_self_correction_stale_rules_and_evolution(tmp_path: Path) -> None:
     ledger_file = tmp_path / "ledger.jsonl"
-    spec_v1 = ProjectHarnessSpec(
+    spec_v1 = ProjectSpec(
         invariants=InvariantsSpec(
             custom_regex_rules=[
                 RegexRule(
@@ -237,7 +237,7 @@ def test_ahe_telemetry_detects_thrashing_self_correction_stale_rules_and_evoluti
     assert report["thrash_alerts"][0]["file"] == "src/a.py"
     assert report["self_correction"]["rate"] == 1.0
     assert "CUSTOM_REGEX:never-fires" in report["stale_rule_candidates"]
-    assert len(report["harness_evolution"]) == 1
+    assert len(report["spec_evolution"]) == 1
     assert report["recommendations"]
 
     gc_report = run_gc_scan(tmp_path, spec_v1)
@@ -248,9 +248,9 @@ def test_hooks_installers_and_live_hermes_plugin_transform_tool_result(tmp_path:
     _init_git_repo(tmp_path)
     ledger_file = tmp_path / "outside-ledger.jsonl"
 
-    harness_yaml = tmp_path / ".birkin" / "harness.yaml"
-    harness_yaml.parent.mkdir(parents=True)
-    harness_yaml.write_text(
+    config_yaml = tmp_path / ".birkin" / "config.yaml"
+    config_yaml.parent.mkdir(parents=True)
+    config_yaml.write_text(
         f"""version: 1
 project:
   name: demo
@@ -279,7 +279,7 @@ telemetry:
     assert code == EXIT_STATIC
     assert findings[0].rule == "ARCH_LAYER_VIOLATION"
     assert "Fix:" in feedback
-    assert resolve_ledger_path(tmp_path, ProjectHarnessSpec(telemetry=TelemetrySpec(ledger_path=str(ledger_file)))).is_file()
+    assert resolve_ledger_path(tmp_path, ProjectSpec(telemetry=TelemetrySpec(ledger_path=str(ledger_file)))).is_file()
 
     # 2. Git hook installer (idempotent)
     r1 = install_git_pre_commit_hook(tmp_path)
@@ -304,10 +304,11 @@ telemetry:
     plugins_dir = tmp_path / "hermes_plugins"
     h_res = install_hermes_plugin(plugins_dir)
     assert h_res["status"] == "installed"
-    plugin_init = plugins_dir / "birkin-harness" / "__init__.py"
-    assert (plugins_dir / "birkin-harness" / "plugin.yaml").is_file()
+    plugin_init = plugins_dir / "birkin" / "__init__.py"
+    assert (plugins_dir / "birkin" / "plugin.yaml").is_file()
+    assert not (plugins_dir / "birkin-harness").exists()
 
-    spec_mod = importlib.util.spec_from_file_location("birkin_harness_test_plugin", plugin_init)
+    spec_mod = importlib.util.spec_from_file_location("birkin_test_plugin", plugin_init)
     assert spec_mod and spec_mod.loader
     mod = importlib.util.module_from_spec(spec_mod)
     spec_mod.loader.exec_module(mod)
@@ -321,7 +322,7 @@ telemetry:
     mod.register(_FakeCtx())
     assert registered == ["transform_tool_result"]
 
-    # Trigger plugin on violating file -> injects birkin_harness_feedback into JSON result
+    # Trigger plugin on violating file -> injects birkin_feedback into JSON result
     transformed = mod.transform_tool_result(
         tool_name="write_file",
         args={"path": str(core_py)},
@@ -329,7 +330,7 @@ telemetry:
     )
     assert transformed is not None
     parsed_res = json.loads(transformed)
-    assert "ARCH_LAYER_VIOLATION" in parsed_res["birkin_harness_feedback"]
+    assert "ARCH_LAYER_VIOLATION" in parsed_res["birkin_feedback"]
 
     # Clean edit -> returns None (zero noise)
     core_py.write_text("CORE = 1\n", encoding="utf-8")
@@ -340,7 +341,7 @@ telemetry:
     )
     assert clean_res is None
 
-    # Non-harnessed repo -> silent pass
+    # Unconfigured repo -> silent pass
     other = tmp_path / "other_dir" / "foo.py"
     other.parent.mkdir()
     other.write_text("x = 1\n", encoding="utf-8")

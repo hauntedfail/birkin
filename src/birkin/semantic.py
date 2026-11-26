@@ -18,7 +18,7 @@ from urllib.parse import urlparse
 import httpx
 
 from birkin.constants import EXIT_LIVE_CONTRACT, EXIT_LIVE_TRANSIENT, EXIT_PASS
-from birkin.project_models import ProjectFinding, ProjectHarnessSpec, SemanticRule
+from birkin.project_models import ProjectFinding, ProjectSpec, SemanticRule
 
 _SEMANTIC_SYSTEM_PROMPT = (
     "You are a strict, narrow code-review predicate evaluator. "
@@ -61,7 +61,7 @@ def _match_glob(rel_posix: str, pattern: str) -> bool:
     return re.match("".join(regex_parts), rel_posix) is not None
 
 
-def _resolve_api_key(spec: ProjectHarnessSpec) -> str | None:
+def _resolve_api_key(spec: ProjectSpec) -> str | None:
     env_name = spec.semantic.api_key_env
     if env_name and os.environ.get(env_name):
         return os.environ[env_name].strip()
@@ -156,7 +156,7 @@ def _parse_verdict_json(raw_text: str) -> dict[str, Any]:
 
 def _query_semantic_predicate(
     client: httpx.Client,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     rule: SemanticRule,
     target_label: str,
     snippet: str,
@@ -213,7 +213,7 @@ def _query_semantic_predicate(
 
 def run_semantic_review(
     repo_root: Path,
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     staged: bool = False,
     diff_ref: str | None = None,
@@ -309,7 +309,7 @@ def run_semantic_review(
 
 
 def evaluate_semantic_rules(
-    spec: ProjectHarnessSpec,
+    spec: ProjectSpec,
     *,
     live: bool = False,
     transport: httpx.BaseTransport | None = None,

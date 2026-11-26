@@ -6,7 +6,7 @@ Birkin is a portable Harness Engineering engine for multi-language repositories 
 
 ## Repository Map
 
-- Portable harness spec: [.birkin/harness.yaml](.birkin/harness.yaml)
+- Project specification: [.birkin/config.yaml](.birkin/config.yaml)
 - Human overview & CLI reference: [README.md](README.md)
 - Hermes policy example: [birkin-policy.example.yaml](birkin-policy.example.yaml)
 - CI pipeline: [.github/workflows/ci.yml](.github/workflows/ci.yml)
@@ -24,8 +24,9 @@ Imports may only point downward; `birkin check` enforces this mechanically:
 
 ## Non-Negotiable Invariants
 
-- All repo prose (docs, comments, harness rules, briefs) must be in English.
-- Fail closed: unknown policy/harness keys (`extra="forbid"`), missing explicit specs, and provider/parse errors are never treated as approval.
+- All repo prose (docs, comments, rules, briefs) must be in English.
+- Fail closed: unknown policy/spec keys (`extra="forbid"`), missing explicit specs, and provider/parse errors are never treated as approval.
+- Never naively attach literal category words like `harness` to filesystem paths, config filenames, plugins, CLI flags, or identifiers — use Birkin's own identity (`.birkin/config.yaml`, `~/.hermes/plugins/birkin`).
 - Keep `AGENTS.md` <= 140 lines and every code module <= 600 lines.
 - Every custom regex or semantic rule must ship with both `examples_pass` and `examples_fail` fixtures and pass `birkin eval-rules`.
 - Pair every new guard with both positive and negative (Proof-of-Life) tests.

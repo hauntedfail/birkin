@@ -6,16 +6,16 @@ Portable **Harness Engineering Engine** for coding agents across multi-language 
 
 A coding agent is `Model + Harness`. A standalone pass/fail wrapper does not strengthen a harness; a real outer harness is a **closed control loop**:
 
-1. **Feedforward Guides** (OpenAI *Harness Engineering*, Feb 2026; Böckeler / Martin Fowler, Apr 2026) — Steer the agent *before* it edits via a strict, versioned [.birkin/harness.yaml](.birkin/harness.yaml), concise map-style `AGENTS.md` line budgets, verified doc links, and local-vs-CI command parity.
+1. **Feedforward Guides** (OpenAI *Harness Engineering*, Feb 2026; Böckeler / Martin Fowler, Apr 2026) — Steer the agent *before* it edits via a strict, versioned [.birkin/config.yaml](.birkin/config.yaml), concise map-style `AGENTS.md` line budgets, verified doc links, and local-vs-CI command parity.
 2. **Computational Sensors** (deterministic, sub-second) — Multi-language static import parsing (Python AST, Go, Rust, TypeScript/JS) enforcing declared architecture layer DAGs and forbidden imports, file size budgets, secret/debug/prose invariants, and custom regex rules — emitting LLM-optimized remediation instructions at edit time.
-3. **Inferential Sensors + Self-Calibration** (`jev-lint` / `jev-pref` pattern, vendor-agnostic) — Narrow, single-predicate semantic review rules over diffs or files via any OpenAI-compatible endpoint (such as local Magpie), with mandatory `examples_pass` / `examples_fail` calibration (`birkin eval-rules`) so broken sensors cannot silently pass.
-4. **Append-Only Revision-Pinned Receipts** (*Towards Portable Specification of the Agent Harness*, arXiv:2610.40917) — Every check, hook, and verify run appends a hash-chained receipt outside the repo working tree (`~/.birkin/ledger/`) bound to exact `git HEAD`, working-tree digest, and `harness_sha256`.
-5. **Observability-Driven Evolution & Garbage Collection** (*Agentic Harness Engineering*, arXiv:2604.25850; Anthropic *Harness Design*, Mar 2026) — Distills receipts into recurring violation hotspots, agent thrash alerts, self-correction rates, before/after `harness_sha256` impact, and dead/stale rules eligible for pruning (`birkin steer`, `birkin gc`).
+3. **Inferential Sensors + Self-Calibration** (`jev-lint` / `jev-pref` pattern, vendor-agnostic) — Narrow, single-predicate semantic review rules over diffs or files via any OpenAI-compatible endpoint, with mandatory `examples_pass` / `examples_fail` calibration (`birkin eval-rules`) so broken sensors cannot silently pass.
+4. **Append-Only Revision-Pinned Receipts** (*Towards Portable Specification of the Agent Harness*, arXiv:2610.40917) — Every check, hook, and verify run appends a hash-chained receipt outside the repo working tree (`~/.birkin/ledger/`) bound to exact `git HEAD`, working-tree digest, and `spec_sha256`.
+5. **Observability-Driven Evolution & Garbage Collection** (*Agentic Harness Engineering*, arXiv:2604.25850; Anthropic *Harness Design*, Mar 2026) — Distills receipts into recurring violation hotspots, agent thrash alerts, self-correction rates, before/after `spec_sha256` impact, and dead/stale rules eligible for pruning (`birkin steer`, `birkin gc`).
 
 ## Quick Start (Any Repository)
 
 ```bash
-# 1. Auto-detect stack (Python/Go/Rust/TS) and scaffold .birkin/harness.yaml
+# 1. Auto-detect stack (Python/Go/Rust/TS) and scaffold .birkin/config.yaml
 birkin init /path/to/repo --write
 
 # 2. Emit compact feedforward brief for an agent entering the repo
@@ -52,11 +52,11 @@ birkin install-hooks /path/to/repo --target git
 # Install Claude Code PostToolUse hook (repo-local .claude/settings.local.json, or --global)
 birkin install-hooks /path/to/repo --target claude
 
-# Install native Hermes Agent plugin (~/.hermes/plugins/birkin-harness/, transform_tool_result)
+# Install native Hermes Agent plugin (~/.hermes/plugins/birkin/, transform_tool_result)
 birkin install-hooks --target hermes
 ```
 
-On non-Birkin repositories (no `.birkin/harness.yaml`), hooks exit cleanly in milliseconds with zero interference.
+On non-Birkin repositories (no `.birkin/config.yaml`), hooks exit cleanly in milliseconds with zero interference.
 
 ## Hermes Runtime Verifier (Backward Compatible)
 
