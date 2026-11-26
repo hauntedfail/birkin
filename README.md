@@ -1,5 +1,7 @@
 # Birkin
 
+<p align="center"><img src="assets/logo/birkin-512.png" width="256" height="256" alt="Birkin logo, a cognac leather bag"></p>
+
 Native **Rust** verification engine backed by a machine-checked **Lean 4** formal kernel (`BirkinSpec`), serving coding agents across multi-language repositories (Python, Go, Rust, Lean 4, TypeScript/JavaScript) plus fail-closed **Hermes Agent** runtime verification.
 
 ## Architecture: Rust Engine + Lean 4 Proof Kernel
