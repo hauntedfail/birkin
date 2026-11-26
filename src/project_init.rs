@@ -72,7 +72,7 @@ pub fn detect_project_spec(repo_root: &Path) -> ProjectSpec {
     {
         languages.push("lean".into());
         let cmd = if repo_root.join("lean").join("lakefile.toml").is_file() {
-            "lake --dir lean build"
+            "cd lean && lake build"
         } else {
             "lake build"
         };

@@ -61,6 +61,7 @@ architecture:
         - "src/project_init.rs"
         - "src/sensors.rs"
         - "src/semantic.rs"
+        - "src/verify.rs"
       allowed_dependencies:
         - core
         - models
@@ -111,7 +112,7 @@ architecture:
 verify:
   commands:
     - name: lean-proofs
-      cmd: "lake --dir lean build"
+      cmd: "cd lean && lake build"
       kind: build
       timeout_seconds: 300
     - name: cargo-clippy

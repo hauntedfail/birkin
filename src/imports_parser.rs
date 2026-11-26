@@ -14,16 +14,22 @@ pub struct ImportEdge {
     pub resolved_path: Option<String>,
 }
 
+impl ImportEdge {
+    fn new(source_file: &str, line: usize, raw: impl Into<String>, resolved_path: Option<String>) -> Self {
+        Self {
+            source_file: source_file.to_string(),
+            line,
+            raw: raw.into(),
+            resolved_path,
+        }
+    }
+}
+
 const TS_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 
 fn rel_posix(path: &Path, root: &Path) -> Option<String> {
     let rel = path.strip_prefix(root).ok()?;
-    Some(
-        rel.components()
-            .map(|c| c.as_os_str().to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("/"),
-    )
+    Some(rel.components().map(|c| c.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/"))
 }
 
 /// Strip `//` and `/* ... */` comments while preserving line numbers and string literals.
@@ -200,12 +206,7 @@ pub fn extract_python_imports(file_path: &Path, repo_root: &Path) -> Vec<ImportE
                     continue;
                 }
                 let resolved = resolve_python_module(mod_name, repo_root, &roots);
-                edges.push(ImportEdge {
-                    source_file: rel.clone(),
-                    line: line_no,
-                    raw: mod_name.to_string(),
-                    resolved_path: resolved,
-                });
+                edges.push(ImportEdge::new(&rel, line_no, mod_name, resolved));
             }
             idx += 1;
             continue;
@@ -260,28 +261,14 @@ pub fn extract_python_imports(file_path: &Path, repo_root: &Path) -> Vec<ImportE
                     format!("{full_mod}.{sym}")
                 };
                 if let Some(res_sub) = resolve_python_module(&candidate, repo_root, &roots) {
-                    let raw = if raw_mod.is_empty() {
-                        (*sym).to_string()
-                    } else {
-                        format!("{raw_mod}.{sym}")
-                    };
-                    edges.push(ImportEdge {
-                        source_file: rel.clone(),
-                        line: line_no,
-                        raw,
-                        resolved_path: Some(res_sub),
-                    });
+                    let raw = if raw_mod.is_empty() { (*sym).to_string() } else { format!("{raw_mod}.{sym}") };
+                    edges.push(ImportEdge::new(&rel, line_no, raw, Some(res_sub)));
                     emitted = true;
                 }
             }
             if !emitted && !full_mod.is_empty() {
                 let resolved = resolve_python_module(&full_mod, repo_root, &roots);
-                edges.push(ImportEdge {
-                    source_file: rel.clone(),
-                    line: line_no,
-                    raw: raw_mod.to_string(),
-                    resolved_path: resolved,
-                });
+                edges.push(ImportEdge::new(&rel, line_no, raw_mod, resolved));
             }
         }
         idx += 1;
@@ -341,12 +328,7 @@ pub fn extract_go_imports(
             }
             if let Some(caps) = single_re.captures(line) {
                 let pkg = &caps[1];
-                edges.push(ImportEdge {
-                    source_file: rel.clone(),
-                    line: line_no,
-                    raw: pkg.to_string(),
-                    resolved_path: resolve_go_import(pkg, effective_mod, repo_root),
-                });
+                edges.push(ImportEdge::new(&rel, line_no, pkg, resolve_go_import(pkg, effective_mod, repo_root)));
             }
         } else {
             if stripped.starts_with(')') {
@@ -355,12 +337,7 @@ pub fn extract_go_imports(
             }
             if let Some(caps) = block_item_re.captures(line) {
                 let pkg = &caps[1];
-                edges.push(ImportEdge {
-                    source_file: rel.clone(),
-                    line: line_no,
-                    raw: pkg.to_string(),
-                    resolved_path: resolve_go_import(pkg, effective_mod, repo_root),
-                });
+                edges.push(ImportEdge::new(&rel, line_no, pkg, resolve_go_import(pkg, effective_mod, repo_root)));
             }
         }
     }
@@ -449,12 +426,7 @@ pub fn extract_rust_imports(file_path: &Path, repo_root: &Path) -> Vec<ImportEdg
                     resolved = resolve_rust_path(&parts[ups..], repo_root, &parent_dir);
                 }
             }
-            edges.push(ImportEdge {
-                source_file: rel.clone(),
-                line: line_no,
-                raw: raw_expr.to_string(),
-                resolved_path: resolved,
-            });
+            edges.push(ImportEdge::new(&rel, line_no, raw_expr, resolved));
             idx += 1;
             continue;
         }
@@ -463,12 +435,7 @@ pub fn extract_rust_imports(file_path: &Path, repo_root: &Path) -> Vec<ImportEdg
             let mod_name = &caps[1];
             let base_dir = file_path.parent().unwrap_or(repo_root);
             let resolved = resolve_rust_path(&[mod_name], repo_root, base_dir);
-            edges.push(ImportEdge {
-                source_file: rel.clone(),
-                line: line_no,
-                raw: format!("mod {mod_name}"),
-                resolved_path: resolved,
-            });
+            edges.push(ImportEdge::new(&rel, line_no, format!("mod {mod_name}"), resolved));
         }
         idx += 1;
     }
@@ -533,22 +500,90 @@ pub fn extract_ts_imports(file_path: &Path, repo_root: &Path) -> Vec<ImportEdge>
         }
         let line_no = cleaned[..m.start()].bytes().filter(|&b| b == b'\n').count() + 1;
         let resolved = resolve_ts_import(specifier, file_path, repo_root);
-        edges.push(ImportEdge {
-            source_file: rel.clone(),
-            line: line_no,
-            raw: specifier.to_string(),
-            resolved_path: resolved,
-        });
+        edges.push(ImportEdge::new(&rel, line_no, specifier, resolved));
     }
     edges
 }
 
+fn strip_lean_comments(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let (n, mut i, mut depth, mut in_str) = (chars.len(), 0usize, 0usize, false);
+    let mut out = String::with_capacity(text.len());
+    while i < n {
+        let ch = chars[i];
+        if depth > 0 {
+            if ch == '/' && i + 1 < n && chars[i + 1] == '-' { depth += 1; i += 2; continue; }
+            if ch == '-' && i + 1 < n && chars[i + 1] == '/' { depth -= 1; i += 2; continue; }
+            if ch == '\n' { out.push('\n'); }
+            i += 1;
+            continue;
+        }
+        if in_str {
+            out.push(ch);
+            if ch == '\\' && i + 1 < n { out.push(chars[i + 1]); i += 2; continue; }
+            if ch == '"' { in_str = false; }
+            i += 1;
+            continue;
+        }
+        if ch == '"' { in_str = true; out.push(ch); i += 1; continue; }
+        if ch == '-' && i + 1 < n && chars[i + 1] == '-' {
+            while i < n && chars[i] != '\n' { i += 1; }
+            continue;
+        }
+        if ch == '/' && i + 1 < n && chars[i + 1] == '-' { depth = 1; i += 2; continue; }
+        out.push(ch);
+        i += 1;
+    }
+    out
+}
+
+fn resolve_lean_import(module: &str, file_path: &Path, repo_root: &Path) -> Option<String> {
+    let mut rel_mod = module.split('.').filter(|s| !s.is_empty()).collect::<PathBuf>();
+    rel_mod.set_extension("lean");
+    let resolved_root = fs::canonicalize(repo_root).unwrap_or_else(|_| repo_root.to_path_buf());
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let mut cur = file_path.parent();
+    while let Some(dir) = cur {
+        if dir.join("lakefile.toml").is_file() || dir.join("lakefile.lean").is_file() {
+            roots.push(dir.to_path_buf());
+        }
+        if dir == repo_root || dir == resolved_root { break; }
+        cur = dir.parent();
+    }
+    roots.extend([resolved_root.join("lean"), resolved_root.clone()]);
+    for root in roots {
+        let cand = root.join(&rel_mod);
+        if cand.is_file() {
+            let canon = fs::canonicalize(&cand).unwrap_or(cand);
+            if let Some(r) = rel_posix(&canon, &resolved_root) { return Some(r); }
+        }
+    }
+    None
+}
+
+/// Extract Lean 4 `import` statements, skipping `--` and nested `/- ... -/` comments.
+pub fn extract_lean_imports(file_path: &Path, repo_root: &Path) -> Vec<ImportEdge> {
+    let (Some(rel), Ok(text)) = (rel_posix(file_path, repo_root), fs::read_to_string(file_path)) else {
+        return Vec::new();
+    };
+    let cleaned = strip_lean_comments(&text);
+    let imp_re = Regex::new(
+        r"^\s*(?:(?:public|private|meta)\s+)*import\s+(?:all\s+)?([A-Za-z_][A-Za-z0-9_'.]*)",
+    )
+    .unwrap();
+    cleaned
+        .lines()
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            let module = imp_re.captures(line)?[1].to_string();
+            let resolved = resolve_lean_import(&module, file_path, repo_root);
+            Some(ImportEdge::new(&rel, idx + 1, module, resolved))
+        })
+        .collect()
+}
+
 /// Dispatch import extraction by file suffix.
-pub fn extract_imports_for_file(
-    file_path: &Path,
-    repo_root: &Path,
-    go_module: Option<&str>,
-) -> Vec<ImportEdge> {
+pub fn extract_imports_for_file(file_path: &Path, repo_root: &Path, go_module: Option<&str>) -> Vec<ImportEdge> {
     let ext = file_path
         .extension()
         .and_then(|e| e.to_str())
@@ -558,6 +593,7 @@ pub fn extract_imports_for_file(
         ".py" => extract_python_imports(file_path, repo_root),
         ".go" => extract_go_imports(file_path, repo_root, go_module),
         ".rs" => extract_rust_imports(file_path, repo_root),
+        ".lean" => extract_lean_imports(file_path, repo_root),
         s if TS_EXTENSIONS.contains(&s) => extract_ts_imports(file_path, repo_root),
         _ => Vec::new(),
     }

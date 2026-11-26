@@ -8,8 +8,9 @@ use crate::project_models::{
     find_repo_root, find_spec_file, load_project_spec, ProjectFinding, ProjectSpec,
 };
 use crate::semantic::{evaluate_semantic_rules, run_semantic_review};
-use crate::sensors::{evaluate_regex_rules, run_project_sensors, run_verify_commands};
+use crate::sensors::{evaluate_regex_rules, run_project_sensors};
 use crate::steer::analyze_telemetry;
+use crate::verify::run_verify_commands;
 use serde_json::{json, Map, Value};
 use std::fs;
 use std::path::{Path, PathBuf};

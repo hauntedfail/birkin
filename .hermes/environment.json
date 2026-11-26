@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "recipe": {
+    "name": "Birkin (Rust + Lean 4 CLI)",
+    "kind": "rust",
+    "bootstrap": [],
+    "build": [
+      "cd lean && lake build",
+      "cargo build"
+    ],
+    "test": [
+      "cargo clippy --all-targets -- -D warnings",
+      "cargo test",
+      "cargo run --quiet -- eval-rules",
+      "cargo run --quiet -- check --no-receipt"
+    ],
+    "start": null,
+    "port": null,
+    "readinessPath": "/",
+    "evidence": [
+      "CLI binary project with Lean 4 formal kernel; no HTTP server"
+    ]
+  }
+}

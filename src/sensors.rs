@@ -11,12 +11,10 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::time::Instant;
 use walkdir::WalkDir;
 
 const CODE_EXTENSIONS: &[&str] = &[
-    ".py", ".go", ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
+    ".py", ".go", ".rs", ".lean", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs",
 ];
 const TEXT_EXTENSIONS: &[&str] = &[
     ".py", ".go", ".rs", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".lean", ".md", ".yaml",
@@ -464,90 +462,6 @@ pub fn run_project_sensors(
     }
 
     (findings, checked_rel)
-}
-
-fn tail_chars(s: &str, max_chars: usize) -> String {
-    let count = s.chars().count();
-    if count <= max_chars {
-        s.to_string()
-    } else {
-        s.chars().skip(count - max_chars).collect()
-    }
-}
-
-pub fn run_verify_commands(
-    repo_root: &Path,
-    spec: &ProjectSpec,
-) -> (Vec<ProjectFinding>, Vec<Value>) {
-    let mut findings = Vec::new();
-    let mut results = Vec::new();
-
-    for vc in &spec.verify.commands {
-        let t0 = Instant::now();
-        let output = Command::new("sh")
-            .args(["-c", &vc.cmd])
-            .current_dir(repo_root)
-            .output();
-        let dur_ms = t0.elapsed().as_millis() as u64;
-
-        match output {
-            Ok(out) => {
-                let code = out.status.code().unwrap_or(1);
-                let ok = out.status.success();
-                let combined = format!(
-                    "{}\n{}",
-                    String::from_utf8_lossy(&out.stdout),
-                    String::from_utf8_lossy(&out.stderr)
-                );
-                let tail = tail_chars(combined.trim(), 1500);
-                results.push(json!({
-                    "name": vc.name, "cmd": vc.cmd, "kind": vc.kind,
-                    "exit_code": code, "duration_ms": dur_ms,
-                    "status": if ok { "PASS" } else { "FAIL" }, "output_tail": tail,
-                }));
-                if !ok {
-                    let mut details = BTreeMap::new();
-                    details.insert("exit_code".into(), json!(code));
-                    details.insert("output_tail".into(), json!(tail_chars(&tail, 600)));
-                    findings.push(ProjectFinding {
-                        rule: format!("ADMISSION_VERIFY_FAILED:{}", vc.name),
-                        category: "admission".into(),
-                        severity: "error".into(),
-                        file: None,
-                        line: None,
-                        message: format!(
-                            "Canonical verify command '{}' (`{}`) failed with exit {code}.",
-                            vc.name, vc.cmd
-                        ),
-                        remediation: format!(
-                            "Run `{}` locally, fix the reported failures, and re-run `birkin check --run-verify`.",
-                            vc.cmd
-                        ),
-                        details,
-                    });
-                }
-            }
-            Err(err) => {
-                results.push(json!({
-                    "name": vc.name, "cmd": vc.cmd, "kind": vc.kind,
-                    "exit_code": 127, "duration_ms": dur_ms,
-                    "status": "ERROR", "output_tail": err.to_string(),
-                }));
-                findings.push(ProjectFinding {
-                    rule: format!("ADMISSION_VERIFY_FAILED:{}", vc.name),
-                    category: "admission".into(),
-                    severity: "error".into(),
-                    file: None,
-                    line: None,
-                    message: format!("Failed spawning verify command '{}': {err}", vc.name),
-                    remediation: format!("Ensure `{}` is executable in PATH.", vc.cmd),
-                    details: BTreeMap::new(),
-                });
-            }
-        }
-    }
-
-    (findings, results)
 }
 
 pub fn evaluate_regex_rules(spec: &ProjectSpec) -> Value {

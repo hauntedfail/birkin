@@ -4,7 +4,7 @@
 //!   0. core: constants, glob
 //!   1. models: models, project_models
 //!   2. utils: config_utils, imports_parser, ledger
-//!   3. engines: static_check, live, drift, guides, project_init, sensors, semantic
+//!   3. engines: static_check, live, drift, guides, project_init, sensors, semantic, verify
 //!   4. orchestration: gc, steer, hooks, report
 //!   5. cli: project_cli, cli, lib, main
 
@@ -29,3 +29,4 @@ pub mod semantic;
 pub mod sensors;
 pub mod static_check;
 pub mod steer;
+pub mod verify;

@@ -85,7 +85,7 @@ See [birkin-policy.example.yaml](birkin-policy.example.yaml) for the strict Herm
 ## Development
 
 ```bash
-lake --dir lean build
+cd lean && lake build && cd ..
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run --quiet -- eval-rules
