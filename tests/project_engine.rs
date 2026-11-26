@@ -255,3 +255,66 @@ fn hook_installers_are_idempotent_and_cli_binary_works() {
     assert_eq!(parsed2["status"], "FAIL");
     let _ = json!({});
 }
+
+#[test]
+fn ci_parity_ignores_release_workflows_and_matches_bun_and_birkin_invocations() {
+    let tmp = init_sample_repo();
+    let root = tmp.path();
+    let wf_dir = root.join(".github/workflows");
+    fs::create_dir_all(&wf_dir).unwrap();
+    fs::write(
+        wf_dir.join("release.yml"),
+        "name: Release\non:\n  push:\n    tags: ['v*']\njobs:\n  pub:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          [[ \"$out\" == \"birkin 0.5.0\" ]]\n          gh release create v0.5.0 --title \"Birkin v0.5.0\"\n",
+    )
+    .unwrap();
+    fs::write(
+        wf_dir.join("ci.yml"),
+        "name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo \"Birkin banner\"\n      - run: bun run verify\n      - run: birkin check --no-receipt\n",
+    )
+    .unwrap();
+
+    let (mut spec, _) = load_project_spec(root, None).unwrap();
+    spec.verify.check_ci_parity = true;
+    spec.verify.commands = vec![];
+    let findings = audit_guides(root, &spec, Some(NaiveDate::from_ymd_opt(2026, 11, 26).unwrap()));
+    assert!(
+        findings.iter().any(|f| f.rule == "ADMISSION_NO_LOCAL_VERIFY_DECLARED"),
+        "expected missing verify finding, got {findings:?}"
+    );
+
+    spec.verify.commands = vec![birkin::project_models::VerifyCommand {
+        name: "verify".into(),
+        cmd: "bun run verify".into(),
+        kind: "test".into(),
+        timeout_seconds: 120,
+    }];
+    let findings = audit_guides(root, &spec, Some(NaiveDate::from_ymd_opt(2026, 11, 26).unwrap()));
+    let drift_cmds: Vec<&str> = findings
+        .iter()
+        .filter(|f| f.rule == "ADMISSION_CI_LOCAL_DRIFT")
+        .map(|f| f.message.as_str())
+        .collect();
+    assert_eq!(drift_cmds.len(), 1, "expected only birkin check drift, got {drift_cmds:?}");
+    assert!(drift_cmds[0].contains("birkin check --no-receipt"));
+    assert!(
+        !findings.iter().any(|f| f.file.as_deref() == Some(".github/workflows/release.yml")),
+        "release-only workflow must not trigger CI parity findings: {findings:?}"
+    );
+}
+
+#[test]
+fn detect_project_spec_recognizes_bun_runner() {
+    let tmp = TempDir::new().unwrap();
+    let root = tmp.path();
+    fs::write(root.join("tsconfig.json"), "{}\n").unwrap();
+    fs::write(root.join("bun.lock"), "").unwrap();
+    fs::write(
+        root.join("package.json"),
+        "{\"name\":\"app\",\"packageManager\":\"bun@1.3.13\",\"scripts\":{\"verify\":\"bun test\"}}\n",
+    )
+    .unwrap();
+    let spec = birkin::project_init::detect_project_spec(root);
+    assert!(spec.project.languages.contains(&"typescript".to_string()));
+    assert_eq!(spec.verify.commands.len(), 1);
+    assert_eq!(spec.verify.commands[0].cmd, "bun run verify");
+}

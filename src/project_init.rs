@@ -96,13 +96,24 @@ pub fn detect_project_spec(repo_root: &Path) -> ProjectSpec {
     if pkg_json.is_file() {
         let is_ts = repo_root.join("tsconfig.json").is_file();
         languages.push(if is_ts { "typescript" } else { "javascript" }.into());
-        let runner = if repo_root.join("pnpm-lock.yaml").is_file() {
-            "pnpm"
-        } else {
-            "npm"
-        };
         if let Ok(text) = fs::read_to_string(&pkg_json) {
             if let Ok(Value::Object(pkg)) = serde_json::from_str::<Value>(&text) {
+                let pm = pkg
+                    .get("packageManager")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let runner = if repo_root.join("bun.lock").is_file()
+                    || repo_root.join("bun.lockb").is_file()
+                    || pm.starts_with("bun@")
+                {
+                    "bun"
+                } else if repo_root.join("pnpm-lock.yaml").is_file() || pm.starts_with("pnpm@") {
+                    "pnpm"
+                } else if repo_root.join("yarn.lock").is_file() || pm.starts_with("yarn@") {
+                    "yarn"
+                } else {
+                    "npm"
+                };
                 if let Some(Value::Object(scripts)) = pkg.get("scripts") {
                     if scripts.contains_key("verify") {
                         commands.push(VerifyCommand {

@@ -102,6 +102,24 @@ fn collect_doc_files(repo_root: &Path, spec: &ProjectSpec) -> Vec<PathBuf> {
     files
 }
 
+fn is_release_only_workflow(val: &serde_yaml::Value) -> bool {
+    let key = |s: &str| serde_yaml::Value::String(s.into());
+    let Some(on_map) = val
+        .as_mapping()
+        .and_then(|m| m.get(key("on")))
+        .and_then(serde_yaml::Value::as_mapping)
+    else {
+        return false;
+    };
+    if on_map.contains_key(key("pull_request")) {
+        return false;
+    }
+    if let Some(push) = on_map.get(key("push")).and_then(serde_yaml::Value::as_mapping) {
+        return push.contains_key(key("tags")) && !push.contains_key(key("branches"));
+    }
+    on_map.contains_key(key("release"))
+}
+
 /// Extract `(workflow_rel_path, command_line)` pairs from `.github/workflows/*.yml|yaml`.
 pub fn extract_ci_run_commands(repo_root: &Path) -> Vec<(String, String)> {
     let wf_dir = repo_root.join(".github").join("workflows");
@@ -127,12 +145,11 @@ pub fn extract_ci_run_commands(repo_root: &Path) -> Vec<(String, String)> {
     let mut commands = Vec::new();
     for wf in wf_files {
         let rel = rel_posix(&wf, repo_root);
-        let Ok(text) = fs::read_to_string(&wf) else {
+        let Ok(text) = fs::read_to_string(&wf) else { continue; };
+        let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&text) else { continue; };
+        if is_release_only_workflow(&val) {
             continue;
-        };
-        let Ok(val) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
-            continue;
-        };
+        }
         let Some(jobs) = val
             .as_mapping()
             .and_then(|m| m.get(serde_yaml::Value::String("jobs".into())))
@@ -170,49 +187,23 @@ pub fn extract_ci_run_commands(repo_root: &Path) -> Vec<(String, String)> {
 fn is_verify_like_ci_cmd(cmd: &str) -> bool {
     let low = cmd.to_lowercase();
     const SKIPS: &[&str] = &[
-        "pip install",
-        "npm ci",
-        "npm install",
-        "pnpm install",
-        "yarn install",
-        "bun install",
-        "cargo fetch",
-        "go mod download",
-        "apt-get",
-        "brew install",
-        "uv sync",
-        "elan default",
-        "elan toolchain",
+        "pip install", "npm ci", "npm install", "pnpm install", "yarn install", "bun install",
+        "cargo fetch", "go mod download", "apt-get", "brew install", "uv sync",
+        "elan default", "elan toolchain",
     ];
     if SKIPS.iter().any(|s| low.contains(s)) {
         return false;
     }
     const TOKENS: &[&str] = &[
-        "pytest",
-        "ruff",
-        "mypy",
-        "pyright",
-        "go test",
-        "go vet",
-        "golangci-lint",
-        "cargo test",
-        "cargo clippy",
-        "cargo check",
-        "lake build",
-        "lake exe",
-        "npm test",
-        "npm run lint",
-        "npm run test",
-        "npm run typecheck",
-        "pnpm test",
-        "pnpm run",
-        "vitest",
-        "jest",
-        "eslint",
-        "tsc",
-        "birkin ",
+        "pytest", "ruff", "mypy", "pyright", "go test", "go vet", "golangci-lint",
+        "cargo test", "cargo clippy", "cargo check", "lake build", "lake exe",
+        "npm test", "npm run lint", "npm run test", "npm run typecheck",
+        "pnpm test", "pnpm run", "bun test", "bun run ", "vitest", "jest", "eslint", "tsc",
     ];
-    TOKENS.iter().any(|t| low.contains(t))
+    if TOKENS.iter().any(|t| low.contains(t)) {
+        return true;
+    }
+    low.starts_with("birkin ") || low.contains("&& birkin ") || low.contains("; birkin ")
 }
 
 pub fn audit_guides(

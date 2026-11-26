@@ -21,6 +21,7 @@ orientation:
   verify_markdown_links: true
   required_docs:
     - README.md
+    - LICENSE
     - birkin-policy.example.yaml
     - lean/lakefile.toml
   require_committed_spec: true
@@ -303,3 +304,24 @@ proofs:
         - BirkinSpec.stageAdmitted_released_requires_all
         - BirkinSpec.reviewClosureValid_resolved_without_reply_false
         - BirkinSpec.canRequestReReview_clarification_blocks
+
+workflow:
+  enabled_contracts:
+    - plan
+    - scope
+    - authority
+    - stage
+    - sawyer
+    - review_closure
+  require_plan_receipt: false
+  toolchain_pin_files:
+    - Cargo.toml
+    - Cargo.lock
+    - lean/lean-toolchain
+  test_runners:
+    - name: cargo-test
+      parser: cargo_test
+      require_nonzero: true
+    - name: lean-proofs
+      parser: lake
+      require_nonzero: false
