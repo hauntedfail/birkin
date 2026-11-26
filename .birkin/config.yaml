@@ -5,17 +5,13 @@ version: 1
 project:
   name: birkin
   languages:
-    - python
+    - rust
+    - lean
   exclude_globs:
     - ".git/**"
     - "**/.git/**"
-    - "**/.venv/**"
-    - "**/venv/**"
-    - "**/__pycache__/**"
-    - "**/*.pyc"
-    - "**/.pytest_cache/**"
-    - "**/.ruff_cache/**"
-    - "**/*.egg-info/**"
+    - "**/target/**"
+    - "**/.lake/**"
     - "**/.birkin/ledger/**"
 
 orientation:
@@ -26,6 +22,7 @@ orientation:
   required_docs:
     - README.md
     - birkin-policy.example.yaml
+    - lean/lakefile.toml
   require_committed_spec: true
   max_review_age_days: 90
 
@@ -35,56 +32,59 @@ architecture:
   layers:
     - name: core
       paths:
-        - "src/birkin/constants.py"
+        - "src/constants.rs"
+        - "src/glob.rs"
       allowed_dependencies: []
-      remediation: "constants.py is Layer 0 and must not import any internal birkin module."
+      remediation: "core modules (constants.rs, glob.rs) are Layer 0 and must not depend on internal modules."
     - name: models
       paths:
-        - "src/birkin/models.py"
-        - "src/birkin/project_models.py"
+        - "src/models.rs"
+        - "src/project_models.rs"
       allowed_dependencies:
         - core
-      remediation: "Schema/model modules may only depend on core (constants.py)."
+      remediation: "Model modules may only depend on core."
     - name: utils
       paths:
-        - "src/birkin/config_utils.py"
-        - "src/birkin/imports_parser.py"
-        - "src/birkin/ledger.py"
+        - "src/config_utils.rs"
+        - "src/imports_parser.rs"
+        - "src/ledger.rs"
       allowed_dependencies:
         - core
         - models
-      remediation: "Utility/parser/ledger modules may only depend on core and models."
+      remediation: "Utility, parser, and ledger modules may only depend on core and models."
     - name: engines
       paths:
-        - "src/birkin/static.py"
-        - "src/birkin/live.py"
-        - "src/birkin/drift.py"
-        - "src/birkin/guides.py"
-        - "src/birkin/project_init.py"
-        - "src/birkin/sensors.py"
-        - "src/birkin/semantic.py"
+        - "src/static_check.rs"
+        - "src/live.rs"
+        - "src/drift.rs"
+        - "src/guides.rs"
+        - "src/project_init.rs"
+        - "src/sensors.rs"
+        - "src/semantic.rs"
       allowed_dependencies:
         - core
         - models
         - utils
-      remediation: "Engine modules must stay decoupled from orchestration, report, and cli layers."
+      remediation: "Engine modules must stay decoupled from orchestration and cli layers."
     - name: orchestration
       paths:
-        - "src/birkin/gc.py"
-        - "src/birkin/steer.py"
-        - "src/birkin/hooks.py"
-        - "src/birkin/report.py"
+        - "src/gc.rs"
+        - "src/steer.rs"
+        - "src/hooks.rs"
+        - "src/report.rs"
       allowed_dependencies:
         - core
         - models
         - utils
         - engines
-      remediation: "Orchestration/reporting modules must not import CLI modules."
+      remediation: "Orchestration and reporting modules must not depend on cli modules."
     - name: cli
       paths:
-        - "src/birkin/cli.py"
-        - "src/birkin/project_cli.py"
-        - "src/birkin/__init__.py"
+        - "src/cli.rs"
+        - "src/project_cli.rs"
+        - "src/ops_cli.rs"
+        - "src/lib.rs"
+        - "src/main.rs"
       allowed_dependencies:
         - core
         - models
@@ -95,77 +95,84 @@ architecture:
   forbidden_imports:
     - id: no-network-in-static-or-models
       from_globs:
-        - "src/birkin/static.py"
-        - "src/birkin/models.py"
-        - "src/birkin/project_models.py"
-        - "src/birkin/imports_parser.py"
+        - "src/constants.rs"
+        - "src/glob.rs"
+        - "src/models.rs"
+        - "src/project_models.rs"
+        - "src/imports_parser.rs"
+        - "src/static_check.rs"
       forbid_patterns:
-        - "httpx*"
-        - "urllib*"
-        - "requests*"
-      message: "Pure static/schema/parser modules must stay offline and never import HTTP clients."
-      remediation: "Keep network I/O isolated to live.py or semantic.py."
+        - "ureq*"
+        - "reqwest*"
+        - "hyper*"
+      message: "Pure static, schema, and parser modules must stay offline and never import HTTP clients."
+      remediation: "Keep network I/O isolated to src/live.rs or src/semantic.rs."
 
 verify:
   commands:
-    - name: lint
-      cmd: "ruff check src tests"
+    - name: lean-proofs
+      cmd: "lake --dir lean build"
+      kind: build
+      timeout_seconds: 300
+    - name: cargo-clippy
+      cmd: "cargo clippy --all-targets -- -D warnings"
       kind: lint
-      timeout_seconds: 60
-    - name: test
-      cmd: "pytest -v"
+      timeout_seconds: 180
+    - name: cargo-test
+      cmd: "cargo test"
       kind: test
-      timeout_seconds: 120
+      timeout_seconds: 300
     - name: eval-rules
-      cmd: "birkin eval-rules"
+      cmd: "cargo run --quiet -- eval-rules"
       kind: custom
-      timeout_seconds: 30
+      timeout_seconds: 60
     - name: self-check
-      cmd: "birkin check --no-receipt"
+      cmd: "cargo run --quiet -- check --no-receipt"
       kind: custom
-      timeout_seconds: 30
+      timeout_seconds: 60
   check_ci_parity: true
 
 invariants:
   forbid_secrets: true
   secret_exempt_globs:
     - "tests/**"
-    - "src/birkin/sensors.py"
+    - "src/sensors.rs"
   english_prose_only: true
   prose_exempt_globs:
-    - "tests/test_project.py"
+    - "tests/**"
   forbid_debug_leftovers: true
   custom_regex_rules:
-    - id: no-bare-except
+    - id: no-sorry-in-lean
       globs:
-        - "src/**/*.py"
-      pattern: "^\\s*except\\s*:\\s*$"
+        - "lean/**/*.lean"
+      pattern: "\\bsorry\\b"
       severity: error
-      message: "Bare `except:` swallows KeyboardInterrupt and masks faults."
-      remediation: "Catch a concrete exception type (or `except Exception:` at top-level boundaries)."
+      message: "Unproved `sorry` placeholder found in Lean 4 formal specification."
+      remediation: "Complete the formal proof without `sorry` or `axiom` shortcuts."
       examples_pass:
-        - "except ValueError as exc:"
-        - "except (OSError, KeyError):"
+        - "theorem combine_comm (a b : ExitCode) : combine a b = combine b a := by cases a <;> cases b <;> rfl"
       examples_fail:
-        - "except:"
-        - "    except :  "
-    - id: no-print-in-engines
+        - "theorem broken : True := by sorry"
+    - id: no-println-in-engines
       globs:
-        - "src/birkin/sensors.py"
-        - "src/birkin/guides.py"
-        - "src/birkin/semantic.py"
-        - "src/birkin/ledger.py"
-        - "src/birkin/steer.py"
-        - "src/birkin/gc.py"
-      pattern: "\\bprint\\s*\\("
+        - "src/sensors.rs"
+        - "src/guides.rs"
+        - "src/semantic.rs"
+        - "src/ledger.rs"
+        - "src/steer.rs"
+        - "src/gc.rs"
+        - "src/static_check.rs"
+        - "src/live.rs"
+        - "src/drift.rs"
+      pattern: "\\bprintln!\\s*\\("
       severity: error
-      message: "Engine/utility modules must return structured data rather than calling print()."
-      remediation: "Return findings/dicts to the CLI layer instead of printing to stdout."
+      message: "Engine and utility modules must return structured data rather than calling println!()."
+      remediation: "Return findings or JSON values to the CLI layer instead of printing to stdout."
       examples_pass:
-        - "findings.append(ProjectFinding(...))"
-        - "return {'status': 'PASS'}"
+        - "findings.push(ProjectFinding { .. });"
+        - "json!({\"status\": \"PASS\"})"
       examples_fail:
-        - "print('debug', value)"
+        - "println!(\"debug {}\", value);"
 
 semantic:
   enabled: false
@@ -178,29 +185,29 @@ semantic:
   rules:
     - id: no-forwarding-only-wrapper
       description: "Avoid thin forwarding abstractions that add no boundary or policy value"
-      predicate: "Does this change introduce a new wrapper class or helper that only forwards calls to one existing implementation without adding validation, policy, lifecycle, or representation translation?"
+      predicate: "Does this change introduce a new wrapper struct or helper that only forwards calls to one existing implementation without adding validation, policy, lifecycle, or representation translation?"
       globs:
-        - "src/**/*.py"
+        - "src/**/*.rs"
       threshold: 0.8
       action: advisory
       remediation: "Call the underlying module directly unless the abstraction enforces a real boundary."
       examples_pass:
-        - "def load_strict_spec(path: Path) -> Spec: return Spec.model_validate(yaml.safe_load(path.read_text()))"
+        - "pub fn load_strict_spec(path: &Path) -> Result<ProjectSpec, String> { serde_yaml::from_str(&fs::read_to_string(path)?) }"
       examples_fail:
-        - "class SensorWrapper:\n    def run(self, r, s): return run_project_sensors(r, s)"
+        - "pub struct SensorWrapper; impl SensorWrapper { pub fn run(r: &Path, s: &ProjectSpec) { run_project_sensors(r, s, None); } }"
     - id: fail-closed-on-provider-error
       description: "Never treat provider or parse errors as approval"
       predicate: "Does this change silently treat a network error, non-200 HTTP status, or JSON parse failure as a passing verification verdict?"
       globs:
-        - "src/birkin/live.py"
-        - "src/birkin/semantic.py"
+        - "src/live.rs"
+        - "src/semantic.rs"
       threshold: 0.75
       action: fix_now
       remediation: "Return EXIT_LIVE_CONTRACT or EXIT_LIVE_TRANSIENT and emit a finding; errors are never approval."
       examples_pass:
-        - "except httpx.HTTPError as exc: return EXIT_LIVE_TRANSIENT, None, str(exc)"
+        - "Err(ureq::Error::Transport(err)) => return (EXIT_LIVE_TRANSIENT, None, Some(err.to_string()))"
       examples_fail:
-        - "except httpx.HTTPError: return EXIT_PASS, {'violated': False}, None"
+        - "Err(_) => return (EXIT_PASS, None, None)"
 
 telemetry:
   enabled: true

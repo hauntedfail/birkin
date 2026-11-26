@@ -1,0 +1,26 @@
+[package]
+name = "birkin"
+version = "0.4.0"
+edition = "2021"
+description = "High-performance Rust engine with a Lean 4 formally verified decision kernel for repository invariants and Hermes Agent runtime verification."
+license = "MIT"
+
+[dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+tempfile = "3"
+ureq = { version = "2", features = ["json"] }
+walkdir = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

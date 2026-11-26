@@ -1,12 +1,10 @@
+/target/
+lean/.lake/
+.DS_Store
+.claude/settings.local.json*
+.birkin/ledger/
 __pycache__/
 *.py[cod]
-*$py.class
 .pytest_cache/
 .ruff_cache/
 .venv/
-dist/
-build/
-*.egg-info/
-.DS_Store
-.claude/settings.local.json
-.birkin/ledger/
