@@ -266,3 +266,17 @@ proofs:
         - BirkinSpec.birkin_six_layer_dag_acyclic
         - BirkinSpec.verifyAdmission_implies_all_matched
         - BirkinSpec.fallbackAllowed_forbidden_rejected
+        - BirkinSpec.canDispatchMutating_planOnly_false
+        - BirkinSpec.planValid_blocked_propagates
+        - BirkinSpec.depsOrdered_acyclic
+        - BirkinSpec.pathAdmitted_forbidden_dominates
+        - BirkinSpec.pathAdmitted_verifyOutput_no_source_edit
+        - BirkinSpec.scopeAdmitted_implies_all_in_scope
+        - BirkinSpec.dispatchAdmitted_F_requires_explicit
+        - BirkinSpec.dispatchAdmitted_review_requires_independence
+        - BirkinSpec.dispatchAdmitted_refusal_no_escalation
+        - BirkinSpec.stageAdmitted_zero_discovered_tests_false
+        - BirkinSpec.stageAdmitted_committed_requires_sawyer
+        - BirkinSpec.stageAdmitted_released_requires_all
+        - BirkinSpec.reviewClosureValid_resolved_without_reply_false
+        - BirkinSpec.canRequestReReview_clarification_blocks
