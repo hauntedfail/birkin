@@ -125,6 +125,11 @@ fn parsers_extract_python_go_rust_ts_and_lean_imports() {
 fn verify_runner_enforces_timeout_and_captures_pass_fail() {
     let tmp = TempDir::new().unwrap();
     let mut spec = ProjectSpec::default();
+    let (fail_cmd, hang_cmd) = if cfg!(windows) {
+        ("echo boom 1>&2 & exit 2", "ping -n 10 127.0.0.1 >nul")
+    } else {
+        ("echo boom >&2; exit 2", "echo starting; sleep 10")
+    };
     spec.verify.commands = vec![
         VerifyCommand {
             name: "pass-cmd".into(),
@@ -134,13 +139,13 @@ fn verify_runner_enforces_timeout_and_captures_pass_fail() {
         },
         VerifyCommand {
             name: "fail-cmd".into(),
-            cmd: "echo boom >&2; exit 2".into(),
+            cmd: fail_cmd.into(),
             kind: "lint".into(),
             timeout_seconds: 5,
         },
         VerifyCommand {
             name: "hang-cmd".into(),
-            cmd: "echo starting; sleep 10".into(),
+            cmd: hang_cmd.into(),
             kind: "custom".into(),
             timeout_seconds: 1,
         },

@@ -18,12 +18,17 @@ use std::process::{Command, Stdio};
 use tempfile::TempDir;
 
 fn oracle_path() -> PathBuf {
+    let bin_name = if cfg!(windows) {
+        "birkin-oracle.exe"
+    } else {
+        "birkin-oracle"
+    };
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("lean")
         .join(".lake")
         .join("build")
         .join("bin")
-        .join("birkin-oracle")
+        .join(bin_name)
 }
 
 fn query_lean_oracle(queries: &[String]) -> Vec<String> {

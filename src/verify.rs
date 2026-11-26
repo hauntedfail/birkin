@@ -34,9 +34,19 @@ enum CmdOutcome {
 }
 
 fn execute_with_timeout(repo_root: &Path, cmd: &str, timeout_secs: u64) -> CmdOutcome {
-    let mut command = Command::new("sh");
+    #[cfg(windows)]
+    let mut command = {
+        let mut c = Command::new("cmd");
+        c.args(["/C", cmd]);
+        c
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut c = Command::new("sh");
+        c.args(["-c", cmd]);
+        c
+    };
     command
-        .args(["-c", cmd])
         .current_dir(repo_root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -85,6 +95,14 @@ fn execute_with_timeout(repo_root: &Path, cmd: &str, timeout_secs: u64) -> CmdOu
                     #[cfg(unix)]
                     unsafe {
                         libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL);
+                    }
+                    #[cfg(windows)]
+                    {
+                        let _ = Command::new("taskkill")
+                            .args(["/F", "/T", "/PID", &child.id().to_string()])
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .status();
                     }
                     let _ = child.kill();
                     let _ = child.wait();

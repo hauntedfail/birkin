@@ -1,6 +1,6 @@
 [package]
 name = "birkin"
-version = "0.4.0"
+version = "0.4.2"
 edition = "2021"
 description = "High-performance Rust engine with a Lean 4 formally verified decision kernel for repository invariants and Hermes Agent runtime verification."
 license = "MIT"

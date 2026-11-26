@@ -146,7 +146,7 @@ pub fn run_post_edit_hook(
             .iter()
             .filter_map(|f| serde_json::to_value(f).ok())
             .collect();
-        let _ = append_receipt(
+        if let Err(err) = append_receipt(
             &repo_root,
             &spec,
             "hook:post-edit",
@@ -157,7 +157,9 @@ pub fn run_post_edit_hook(
             &fvals,
             &checked_rel,
             Map::new(),
-        );
+        ) {
+            eprintln!("[birkin] warning: failed recording receipt (hook:post-edit): {err}");
+        }
     }
 
     let feedback = format_llm_feedback(&findings, 12);
@@ -211,7 +213,7 @@ pub fn run_pre_commit_hook(repo_root: &Path) -> Result<(i32, Vec<ProjectFinding>
             .iter()
             .filter_map(|f| serde_json::to_value(f).ok())
             .collect();
-        let _ = append_receipt(
+        if let Err(err) = append_receipt(
             &resolved,
             &spec,
             "hook:pre-commit",
@@ -222,7 +224,9 @@ pub fn run_pre_commit_hook(repo_root: &Path) -> Result<(i32, Vec<ProjectFinding>
             &fvals,
             &checked_rel,
             Map::new(),
-        );
+        ) {
+            eprintln!("[birkin] warning: failed recording receipt (hook:pre-commit): {err}");
+        }
     }
 
     let feedback = format_llm_feedback(&findings, 12);
@@ -245,7 +249,8 @@ pub fn install_git_pre_commit_hook(repo_root: &Path) -> Result<Value, String> {
     let path = hooks.join("pre-commit");
     let invocation = r#"birkin hook pre-commit "$(git rev-parse --show-toplevel)" || exit $?"#;
     let manual = format!("Git uses {}. Integrate `{invocation}` into the active pre-commit hook.", path.display());
-    if hooks != standard || hooks.is_symlink() || path.is_symlink() {
+    let same_hooks_dir = hooks.components().eq(standard.components());
+    if !same_hooks_dir || hooks.is_symlink() || path.is_symlink() {
         return Err(manual);
     }
     fs::create_dir_all(&hooks).map_err(|e| format!("{}: {e}", hooks.display()))?;
@@ -356,7 +361,11 @@ pub fn install_claude_hook(settings_path: &Path) -> Result<Value, String> {
 }
 
 fn hermes_plugin_yaml() -> &'static str {
-    "name: birkin\nversion: \"0.4.0\"\ndescription: \"Real-time Birkin native computational feedback on write_file and patch edits.\"\nauthor: hauntedfail\nkind: standalone\nprovides_hooks:\n  - transform_tool_result\n"
+    concat!(
+        "name: birkin\nversion: \"",
+        env!("CARGO_PKG_VERSION"),
+        "\"\ndescription: \"Real-time Birkin native computational feedback on write_file and patch edits.\"\nauthor: hauntedfail\nkind: standalone\nprovides_hooks:\n  - transform_tool_result\n"
+    )
 }
 
 fn hermes_plugin_init_py(birkin_bin: &Path) -> String {

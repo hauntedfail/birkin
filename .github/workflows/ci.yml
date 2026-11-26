@@ -6,8 +6,12 @@ on:
   pull_request:
 
 jobs:
-  verify:
-    runs-on: ubuntu-latest
+  verify-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -24,6 +28,22 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test (unit, integration, and Lean differential oracle)
         run: cargo test
+      - name: Calibrate Birkin rules
+        run: cargo run --quiet -- eval-rules
+      - name: Run Birkin self-check
+        run: cargo run --quiet -- check --no-receipt
+
+  verify-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Lint (clippy)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test (Rust unit and integration suites)
+        run: cargo test --lib --test project_engine --test parsers_and_verify --test hermes_runtime --test semantic_and_hooks --test git_workflows
       - name: Calibrate Birkin rules
         run: cargo run --quiet -- eval-rules
       - name: Run Birkin self-check

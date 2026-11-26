@@ -256,6 +256,7 @@ pub fn handle_check(
     let exit_code = if has_errors { EXIT_STATIC } else { EXIT_PASS };
 
     let mut receipt: Option<Map<String, Value>> = None;
+    let mut receipt_errors: Vec<String> = Vec::new();
     if spec.telemetry.enabled && !no_receipt {
         let cmd_label = if run_verify { "verify" } else { "check" };
         let fvals: Vec<Value> = findings
@@ -269,7 +270,7 @@ pub fn handle_check(
             .collect();
         meta.insert("verify_commands".into(), json!(vnames));
 
-        if let Ok(rcpt) = append_receipt(
+        match append_receipt(
             &repo_root,
             &spec,
             cmd_label,
@@ -281,7 +282,11 @@ pub fn handle_check(
             &checked,
             meta,
         ) {
-            receipt = Some(rcpt);
+            Ok(rcpt) => receipt = Some(rcpt),
+            Err(err) => {
+                eprintln!("[birkin] warning: failed recording receipt ({cmd_label}): {err}");
+                receipt_errors.push(err);
+            }
         }
 
         if run_verify {
@@ -293,7 +298,7 @@ pub fn handle_check(
             let sensor_errors = findings
                 .iter()
                 .any(|f| f.severity == "error" && f.category != "admission");
-            let _ = append_receipt(
+            if let Err(err) = append_receipt(
                 &repo_root,
                 &spec,
                 "check",
@@ -304,7 +309,10 @@ pub fn handle_check(
                 &sensor_only,
                 &checked,
                 Map::new(),
-            );
+            ) {
+                eprintln!("[birkin] warning: failed recording receipt (check): {err}");
+                receipt_errors.push(err);
+            }
         }
     }
 
@@ -312,6 +320,11 @@ pub fn handle_check(
         .as_ref()
         .and_then(|r| r.get("receipt_sha256"))
         .and_then(Value::as_str);
+    let receipt_error = if receipt_errors.is_empty() {
+        None
+    } else {
+        Some(receipt_errors.join("; "))
+    };
     let report = json!({
         "command": "check",
         "project": spec.project.name,
@@ -324,6 +337,7 @@ pub fn handle_check(
         "verify_results": verify_results,
         "findings": findings,
         "receipt_sha256": receipt_sha,
+        "receipt_error": receipt_error,
     });
 
     let mut lines = vec![format!(
@@ -384,6 +398,7 @@ pub fn handle_review(
     let dur_ms = t0.elapsed().as_millis();
     let evaluated = meta.get("evaluated").and_then(Value::as_u64).unwrap_or(0);
 
+    let mut receipt_error: Option<String> = None;
     if spec.telemetry.enabled && !no_receipt && evaluated > 0 {
         let fvals: Vec<Value> = findings
             .iter()
@@ -403,7 +418,7 @@ pub fn handle_review(
         if let Some(m) = meta.get("model") {
             rmeta.insert("model".into(), m.clone());
         }
-        let _ = append_receipt(
+        if let Err(err) = append_receipt(
             &repo_root,
             &spec,
             "review",
@@ -414,7 +429,10 @@ pub fn handle_review(
             &fvals,
             &rfiles,
             rmeta,
-        );
+        ) {
+            eprintln!("[birkin] warning: failed recording receipt (review): {err}");
+            receipt_error = Some(err);
+        }
     }
 
     let report = json!({
@@ -425,6 +443,7 @@ pub fn handle_review(
         "duration_ms": dur_ms as u64,
         "meta": meta,
         "findings": findings,
+        "receipt_error": receipt_error,
     });
     let mut lines = vec![format!(
         "birkin review ({}): status={} evaluated={} fix_now={} advisories={} ({dur_ms}ms)",

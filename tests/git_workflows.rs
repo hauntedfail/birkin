@@ -201,3 +201,32 @@ fn generated_exemptions_apply_only_to_line_counts() {
         paths.len()
     );
 }
+
+#[test]
+fn check_surfaces_receipt_write_failure_instead_of_ignoring_it() {
+    let repo = Repo::new();
+    let blocked_dir = repo.temp.path().join("ledger-is-a-directory");
+    fs::create_dir(&blocked_dir).unwrap();
+    fs::write(
+        repo.root.join(".birkin/config.yaml"),
+        format!(
+            "version: 1\nproject: {{name: example}}\ntelemetry: {{enabled: true, ledger_path: {:?}}}\n",
+            blocked_dir.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    let out = repo.cmd(BIN, &["check", "--json"]).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    let parsed: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(
+        parsed["receipt_sha256"].is_null(),
+        "expected null receipt_sha256: {parsed}"
+    );
+    let err = parsed["receipt_error"].as_str().unwrap_or("");
+    assert!(!err.is_empty(), "expected receipt_error in JSON: {parsed}");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("failed recording receipt"),
+        "expected stderr receipt warning, got: {stderr}"
+    );
+}
