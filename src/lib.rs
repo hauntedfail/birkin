@@ -6,11 +6,12 @@
 //!   2. utils: config_utils, imports_parser, ledger
 //!   3. engines: static_check, live, drift, guides, project_init, prove, prove_audit, prove_lean, sensors, semantic, verify,
 //!      plan_contract, scope_contract, authority_contract, stage_contract, review_closure
-//!   4. orchestration: gc, steer, hooks, report
+//!   4. orchestration: client_sync, gc, steer, hooks, report
 //!   5. cli: project_cli, ops_cli, workflow_cli, workflow_stage_cli, cli, lib, main
 
 pub mod authority_contract;
 pub mod cli;
+pub mod client_sync;
 pub mod config_utils;
 pub mod constants;
 pub mod drift;

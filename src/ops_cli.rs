@@ -1,5 +1,6 @@
-//! Operational command handlers (hooks, install-hooks, receipt verify, steer, gc).
+//! Operational command handlers (hooks, install-hooks, sync, receipt verify, steer, gc).
 
+use crate::client_sync::{format_sync_human, parse_targets, run_client_sync, SyncMode};
 use crate::constants::{default_hermes_home, home_dir, EXIT_PASS, EXIT_STATIC, EXIT_TOOL_ERROR};
 use crate::gc::run_gc_scan;
 use crate::hooks::{
@@ -11,8 +12,10 @@ use crate::project_init::detect_project_spec;
 use crate::project_models::{find_repo_root, find_spec_file, load_project_spec, ProjectSpec};
 use crate::prove::run_prove;
 use crate::steer::analyze_telemetry;
+use clap::Args;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 fn load_or_detect(
     path: &Path,
@@ -451,4 +454,136 @@ pub fn handle_prove(
     }
     emit(&report, as_json, &lines.join("\n"));
     outcome.exit_code
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SyncArgs {
+    /// Read-only drift audit (writes nothing; exits 4 on drift)
+    #[arg(long)]
+    pub check: bool,
+    /// Deterministically write managed adapters (refuses unmanaged files and symlinks)
+    #[arg(long)]
+    pub apply: bool,
+    /// Required target root directory (never defaults to live $HOME)
+    #[arg(long = "target-root")]
+    pub target_root: Option<PathBuf>,
+    /// Repeatable target filter: git, claude, hermes, skills, all (default: all)
+    #[arg(long = "target")]
+    pub targets: Vec<String>,
+    /// Emit machine-readable JSON output
+    #[arg(long = "json")]
+    pub as_json: bool,
+    /// Skip appending a receipt to the ledger
+    #[arg(long)]
+    pub no_receipt: bool,
+    /// Optional repository directory for recording a sync receipt
+    #[arg(long)]
+    pub repo: Option<PathBuf>,
+    /// Optional explicit .birkin/config.yaml path for recording a sync receipt
+    #[arg(long)]
+    pub spec: Option<PathBuf>,
+    /// Execution surface recorded in receipts
+    #[arg(long, default_value = "cli")]
+    pub surface: String,
+}
+
+fn emit_sync_tool_error(err: &str, as_json: bool) -> i32 {
+    if as_json {
+        let body = json!({
+            "command": "sync",
+            "status": "ERROR",
+            "exit_code": EXIT_TOOL_ERROR,
+            "error": err,
+        });
+        println!("{}", serde_json::to_string_pretty(&body).unwrap_or_else(|_| "{}".into()));
+    } else {
+        eprintln!("ERROR: {err}");
+    }
+    EXIT_TOOL_ERROR
+}
+
+pub fn handle_sync(args: &SyncArgs) -> i32 {
+    let t0 = Instant::now();
+    let mode = match (args.check, args.apply) {
+        (true, false) => SyncMode::Check,
+        (false, true) => SyncMode::Apply,
+        _ => {
+            return emit_sync_tool_error(
+                "Specify exactly one of --check or --apply.",
+                args.as_json,
+            );
+        }
+    };
+    let Some(ref target_root) = args.target_root else {
+        return emit_sync_tool_error(
+            "--target-root <dir> is required; Birkin never defaults sync to live $HOME.",
+            args.as_json,
+        );
+    };
+    let targets = match parse_targets(&args.targets) {
+        Ok(t) => t,
+        Err(e) => return emit_sync_tool_error(&e, args.as_json),
+    };
+    let report = match run_client_sync(target_root, mode, &targets) {
+        Ok(r) => r,
+        Err(e) => return emit_sync_tool_error(&e, args.as_json),
+    };
+
+    let mut receipt_sha: Option<String> = None;
+    let mut receipt_error: Option<String> = None;
+    if !args.no_receipt && (args.repo.is_some() || args.spec.is_some()) {
+        if let Some(ref r) = args.repo {
+            if !r.is_dir() {
+                return emit_sync_tool_error(
+                    &format!("--repo {} is not an existing directory.", r.display()),
+                    args.as_json,
+                );
+            }
+        }
+        let repo_hint = args.repo.as_deref().unwrap_or_else(|| Path::new("."));
+        match load_or_detect(repo_hint, args.spec.as_deref()) {
+            Ok((repo_root, spec, _)) if spec.telemetry.enabled => {
+                let checked: Vec<String> = report.targets.iter().map(|t| t.relative_path.clone()).collect();
+                let mut meta = Map::new();
+                meta.insert("mode".into(), json!(report.mode));
+                meta.insert("target_root".into(), json!(report.target_root));
+                meta.insert("contract_version".into(), json!(report.contract_version));
+                meta.insert("bundle_sha256".into(), json!(report.bundle_sha256));
+                meta.insert("selected_targets".into(), json!(report.selected_targets));
+                match append_receipt(
+                    &repo_root,
+                    &spec,
+                    &format!("sync:{}", report.mode),
+                    &args.surface,
+                    &report.status,
+                    report.exit_code,
+                    t0.elapsed().as_millis(),
+                    &[],
+                    &checked,
+                    meta,
+                ) {
+                    Ok(rcpt) => {
+                        receipt_sha = rcpt.get("receipt_sha256").and_then(Value::as_str).map(str::to_string);
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "[birkin] warning: failed recording receipt (sync:{}): {e}",
+                            report.mode
+                        );
+                        receipt_error = Some(e);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => return emit_sync_tool_error(&e, args.as_json),
+        }
+    }
+
+    let mut payload = serde_json::to_value(&report).unwrap_or_else(|_| json!({}));
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("receipt_sha256".into(), json!(receipt_sha));
+        obj.insert("receipt_error".into(), json!(receipt_error));
+    }
+    emit(&payload, args.as_json, &format_sync_human(&report));
+    report.exit_code
 }

@@ -53,6 +53,8 @@ jobs:
         run: cargo test --test workflow_authority_stage_review -- --skip diff_ --skip sawyer_
       - name: Test (workflow CLI end-to-end without Unix-only fixtures)
         run: cargo test --test workflow_cli_e2e -- --skip unix_
+      - name: Test (client adapter sync and drift without Unix-only symlink fixtures)
+        run: cargo test --test client_sync_and_drift -- --skip unix_
       - name: Calibrate Birkin rules
         run: cargo run --quiet -- eval-rules
       - name: Run Birkin self-check

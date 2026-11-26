@@ -9,7 +9,8 @@ use crate::live::verify_live;
 use crate::models::RuntimePolicy;
 use crate::ops_cli::{
     handle_gc, handle_hook_post_edit, handle_hook_pre_commit, handle_hook_pre_complete,
-    handle_install_hooks, handle_prove, handle_receipt_verify, handle_steer,
+    handle_install_hooks, handle_prove, handle_receipt_verify, handle_steer, handle_sync,
+    SyncArgs,
 };
 use crate::project_cli::{
     handle_audit, handle_check, handle_eval_rules, handle_guide, handle_init, handle_review,
@@ -142,6 +143,8 @@ pub enum Commands {
         #[arg(long = "json")]
         as_json: bool,
     },
+    /// Deterministically sync or audit cross-client thin adapters under --target-root
+    Sync(SyncArgs),
     /// Verify hash-chained revision-pinned receipts
     Receipt {
         #[command(subcommand)]
@@ -472,6 +475,7 @@ pub fn dispatch(cli: Cli) -> i32 {
             hermes_home.as_deref(),
             as_json,
         ),
+        Commands::Sync(args) => handle_sync(&args),
         Commands::Receipt { action } => match action {
             ReceiptAction::Verify {
                 common,

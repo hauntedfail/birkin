@@ -79,6 +79,7 @@ architecture:
       remediation: "Engine modules must stay decoupled from orchestration and cli layers."
     - name: orchestration
       paths:
+        - "src/client_sync.rs"
         - "src/gc.rs"
         - "src/steer.rs"
         - "src/hooks.rs"
@@ -192,6 +193,7 @@ invariants:
         - "src/scope_contract.rs"
         - "src/semantic.rs"
         - "src/ledger.rs"
+        - "src/client_sync.rs"
         - "src/steer.rs"
         - "src/gc.rs"
         - "src/static_check.rs"

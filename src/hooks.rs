@@ -362,16 +362,17 @@ pub fn install_claude_hook(settings_path: &Path) -> Result<Value, String> {
     }))
 }
 
-fn hermes_plugin_yaml() -> &'static str {
+pub fn render_hermes_plugin_yaml() -> String {
     concat!(
         "name: birkin\nversion: \"",
         env!("CARGO_PKG_VERSION"),
         "\"\ndescription: \"Real-time Birkin native computational feedback on write_file and patch edits.\"\nauthor: hauntedfail\nkind: standalone\nprovides_hooks:\n  - transform_tool_result\n"
     )
+    .to_string()
 }
 
-fn hermes_plugin_init_py(birkin_bin: &Path) -> String {
-    let bin_escaped = birkin_bin.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"");
+pub fn render_hermes_plugin_init_py(birkin_bin: &str) -> String {
+    let bin_escaped = birkin_bin.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
         r#""""Hermes Agent native plugin delegating edit feedback to the native Birkin Rust binary."""
 
@@ -388,9 +389,9 @@ _EDIT_TOOLS = frozenset({{"write_file", "patch"}})
 
 
 def _resolve_bin() -> str | None:
-    if Path(_BIRKIN_BIN).is_file():
+    if _BIRKIN_BIN and Path(_BIRKIN_BIN).is_absolute() and Path(_BIRKIN_BIN).is_file():
         return _BIRKIN_BIN
-    return shutil.which("birkin")
+    return shutil.which(_BIRKIN_BIN if _BIRKIN_BIN and not Path(_BIRKIN_BIN).is_absolute() else "birkin")
 
 
 def _extract_path(args: Any) -> Path | None:
@@ -456,11 +457,11 @@ pub fn install_hermes_plugin(plugins_dir: &Path, birkin_bin: Option<&Path>) -> R
     let plugin_dir = plugins_dir.join("birkin");
     fs::create_dir_all(&plugin_dir)
         .map_err(|e| format!("Failed creating {}: {e}", plugin_dir.display()))?;
-    fs::write(plugin_dir.join("plugin.yaml"), hermes_plugin_yaml())
+    fs::write(plugin_dir.join("plugin.yaml"), render_hermes_plugin_yaml())
         .map_err(|e| format!("Failed writing plugin.yaml: {e}"))?;
     fs::write(
         plugin_dir.join("__init__.py"),
-        hermes_plugin_init_py(&resolved_bin),
+        render_hermes_plugin_init_py(&resolved_bin.to_string_lossy()),
     )
     .map_err(|e| format!("Failed writing __init__.py: {e}"))?;
     Ok(json!({
