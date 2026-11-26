@@ -1,4 +1,4 @@
-"""Birkin — Mechanical verifier for Hermes Agent configuration, provider contracts, and runtime drift."""
+"""Birkin — Portable Harness Engineering Engine & Hermes Runtime Verifier."""
 
 from birkin.cli import main
 from birkin.config_utils import (
@@ -17,9 +17,25 @@ from birkin.constants import (
     EXIT_TOOL_ERROR,
 )
 from birkin.drift import verify_drift
+from birkin.gc import run_gc_scan
+from birkin.guides import audit_guides, build_readiness_scorecard
+from birkin.hooks import (
+    install_claude_hook,
+    install_git_pre_commit_hook,
+    install_hermes_plugin,
+    run_post_edit_hook,
+    run_pre_commit_hook,
+)
+from birkin.imports_parser import ImportEdge, extract_imports_for_file
+from birkin.ledger import append_receipt, verify_chain, verify_receipts_for_current_state
 from birkin.live import verify_live
 from birkin.models import Finding, HarnessPolicy
+from birkin.project_init import detect_project_spec, render_agent_guide, render_harness_yaml
+from birkin.project_models import ProjectFinding, ProjectHarnessSpec, load_project_harness
+from birkin.semantic import evaluate_semantic_rules, run_semantic_review
+from birkin.sensors import evaluate_regex_rules, run_project_sensors, run_verify_commands
 from birkin.static import verify_static
+from birkin.steer import analyze_telemetry
 
 __all__ = [
     "EXIT_DRIFT",
@@ -30,13 +46,38 @@ __all__ = [
     "EXIT_TOOL_ERROR",
     "Finding",
     "HarnessPolicy",
+    "ImportEdge",
+    "ProjectFinding",
+    "ProjectHarnessSpec",
+    "analyze_telemetry",
+    "append_receipt",
+    "audit_guides",
+    "build_readiness_scorecard",
     "canonical_config_sha256",
+    "detect_project_spec",
+    "evaluate_regex_rules",
+    "evaluate_semantic_rules",
+    "extract_imports_for_file",
+    "install_claude_hook",
+    "install_git_pre_commit_hook",
+    "install_hermes_plugin",
     "load_policy",
+    "load_project_harness",
     "load_yaml_file",
     "main",
     "parse_dotenv_keys",
     "read_env_secret",
+    "render_agent_guide",
+    "render_harness_yaml",
+    "run_gc_scan",
+    "run_post_edit_hook",
+    "run_pre_commit_hook",
+    "run_project_sensors",
+    "run_semantic_review",
+    "run_verify_commands",
+    "verify_chain",
     "verify_drift",
     "verify_live",
+    "verify_receipts_for_current_state",
     "verify_static",
 ]

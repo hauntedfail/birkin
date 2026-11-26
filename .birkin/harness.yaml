@@ -1,0 +1,209 @@
+# Portable Agent Harness Specification (.birkin/harness.yaml)
+# Dogfooded on Birkin itself: enforced across CLI, git pre-commit, CI, Claude Code, and Hermes.
+version: 1
+
+project:
+  name: birkin
+  languages:
+    - python
+  exclude_globs:
+    - ".git/**"
+    - "**/.git/**"
+    - "**/.venv/**"
+    - "**/venv/**"
+    - "**/__pycache__/**"
+    - "**/*.pyc"
+    - "**/.pytest_cache/**"
+    - "**/.ruff_cache/**"
+    - "**/*.egg-info/**"
+    - "**/.birkin/ledger/**"
+
+orientation:
+  entry_docs:
+    - AGENTS.md
+  max_entry_doc_lines: 140
+  verify_markdown_links: true
+  required_docs:
+    - README.md
+    - birkin-policy.example.yaml
+  require_committed_harness: true
+  max_review_age_days: 90
+
+architecture:
+  max_file_lines: 600
+  file_line_exemptions: []
+  layers:
+    - name: core
+      paths:
+        - "src/birkin/constants.py"
+      allowed_dependencies: []
+      remediation: "constants.py is Layer 0 and must not import any internal birkin module."
+    - name: models
+      paths:
+        - "src/birkin/models.py"
+        - "src/birkin/project_models.py"
+      allowed_dependencies:
+        - core
+      remediation: "Schema/model modules may only depend on core (constants.py)."
+    - name: utils
+      paths:
+        - "src/birkin/config_utils.py"
+        - "src/birkin/imports_parser.py"
+        - "src/birkin/ledger.py"
+      allowed_dependencies:
+        - core
+        - models
+      remediation: "Utility/parser/ledger modules may only depend on core and models."
+    - name: engines
+      paths:
+        - "src/birkin/static.py"
+        - "src/birkin/live.py"
+        - "src/birkin/drift.py"
+        - "src/birkin/guides.py"
+        - "src/birkin/project_init.py"
+        - "src/birkin/sensors.py"
+        - "src/birkin/semantic.py"
+      allowed_dependencies:
+        - core
+        - models
+        - utils
+      remediation: "Engine modules must stay decoupled from orchestration, report, and cli layers."
+    - name: orchestration
+      paths:
+        - "src/birkin/gc.py"
+        - "src/birkin/steer.py"
+        - "src/birkin/hooks.py"
+        - "src/birkin/report.py"
+      allowed_dependencies:
+        - core
+        - models
+        - utils
+        - engines
+      remediation: "Orchestration/reporting modules must not import CLI modules."
+    - name: cli
+      paths:
+        - "src/birkin/cli.py"
+        - "src/birkin/project_cli.py"
+        - "src/birkin/__init__.py"
+      allowed_dependencies:
+        - core
+        - models
+        - utils
+        - engines
+        - orchestration
+      remediation: "CLI modules may compose lower layers only."
+  forbidden_imports:
+    - id: no-network-in-static-or-models
+      from_globs:
+        - "src/birkin/static.py"
+        - "src/birkin/models.py"
+        - "src/birkin/project_models.py"
+        - "src/birkin/imports_parser.py"
+      forbid_patterns:
+        - "httpx*"
+        - "urllib*"
+        - "requests*"
+      message: "Pure static/schema/parser modules must stay offline and never import HTTP clients."
+      remediation: "Keep network I/O isolated to live.py or semantic.py."
+
+verify:
+  commands:
+    - name: lint
+      cmd: "ruff check src tests"
+      kind: lint
+      timeout_seconds: 60
+    - name: test
+      cmd: "pytest -v"
+      kind: test
+      timeout_seconds: 120
+    - name: eval-rules
+      cmd: "birkin eval-rules"
+      kind: custom
+      timeout_seconds: 30
+    - name: harness-check
+      cmd: "birkin check --no-receipt"
+      kind: custom
+      timeout_seconds: 30
+  check_ci_parity: true
+
+invariants:
+  forbid_secrets: true
+  secret_exempt_globs:
+    - "tests/**"
+    - "src/birkin/sensors.py"
+  english_prose_only: true
+  prose_exempt_globs:
+    - "tests/test_project_harness.py"
+  forbid_debug_leftovers: true
+  custom_regex_rules:
+    - id: no-bare-except
+      globs:
+        - "src/**/*.py"
+      pattern: "^\\s*except\\s*:\\s*$"
+      severity: error
+      message: "Bare `except:` swallows KeyboardInterrupt and masks faults."
+      remediation: "Catch a concrete exception type (or `except Exception:` at top-level boundaries)."
+      examples_pass:
+        - "except ValueError as exc:"
+        - "except (OSError, KeyError):"
+      examples_fail:
+        - "except:"
+        - "    except :  "
+    - id: no-print-in-engines
+      globs:
+        - "src/birkin/sensors.py"
+        - "src/birkin/guides.py"
+        - "src/birkin/semantic.py"
+        - "src/birkin/ledger.py"
+        - "src/birkin/steer.py"
+        - "src/birkin/gc.py"
+      pattern: "\\bprint\\s*\\("
+      severity: error
+      message: "Engine/utility modules must return structured data rather than calling print()."
+      remediation: "Return findings/dicts to the CLI layer instead of printing to stdout."
+      examples_pass:
+        - "findings.append(ProjectFinding(...))"
+        - "return {'status': 'PASS'}"
+      examples_fail:
+        - "print('debug', value)"
+
+semantic:
+  enabled: false
+  base_url: "http://127.0.0.1:3425/v1"
+  api_key_env: "BIRKIN_SEMANTIC_API_KEY"
+  model: "auto/gemini-3.8-flash"
+  timeout_seconds: 15.0
+  max_diff_chars: 24000
+  rules_dir: ".birkin/rules"
+  rules:
+    - id: no-forwarding-only-wrapper
+      description: "Avoid thin forwarding abstractions that add no boundary or policy value"
+      predicate: "Does this change introduce a new wrapper class or helper that only forwards calls to one existing implementation without adding validation, policy, lifecycle, or representation translation?"
+      globs:
+        - "src/**/*.py"
+      threshold: 0.8
+      action: advisory
+      remediation: "Call the underlying module directly unless the abstraction enforces a real boundary."
+      examples_pass:
+        - "def load_strict_spec(path: Path) -> Spec: return Spec.model_validate(yaml.safe_load(path.read_text()))"
+      examples_fail:
+        - "class SensorWrapper:\n    def run(self, r, s): return run_project_sensors(r, s)"
+    - id: fail-closed-on-provider-error
+      description: "Never treat provider or parse errors as approval"
+      predicate: "Does this change silently treat a network error, non-200 HTTP status, or JSON parse failure as a passing verification verdict?"
+      globs:
+        - "src/birkin/live.py"
+        - "src/birkin/semantic.py"
+      threshold: 0.75
+      action: fix_now
+      remediation: "Return EXIT_LIVE_CONTRACT or EXIT_LIVE_TRANSIENT and emit a finding; errors are never approval."
+      examples_pass:
+        - "except httpx.HTTPError as exc: return EXIT_LIVE_TRANSIENT, None, str(exc)"
+      examples_fail:
+        - "except httpx.HTTPError: return EXIT_PASS, {'violated': False}, None"
+
+telemetry:
+  enabled: true
+  thrash_threshold: 3
+  thrash_window_minutes: 30
+  stale_rule_min_runs: 20

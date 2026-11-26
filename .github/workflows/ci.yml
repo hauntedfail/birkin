@@ -23,3 +23,7 @@ jobs:
         run: ruff check src tests
       - name: Run pytest
         run: pytest -v
+      - name: Calibrate harness rules
+        run: birkin eval-rules
+      - name: Run Birkin harness check
+        run: birkin check --no-receipt

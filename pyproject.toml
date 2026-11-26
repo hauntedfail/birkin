@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "birkin"
-version = "0.2.0"
-description = "Mechanical verifier for Hermes Agent configuration, provider contracts, and live gateway runtime drift."
+version = "0.3.0"
+description = "Portable Harness Engineering Engine (feedforward guides, multi-language architectural fitness sensors, semantic predicates, hash-chained receipts, AHE telemetry) and Hermes runtime verifier."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
