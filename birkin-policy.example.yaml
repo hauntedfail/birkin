@@ -39,3 +39,11 @@ drift_invariants:
   check_config_mtime_vs_gateway_start: true
   check_env_mtime_vs_gateway_start: true
   check_code_sha_vs_repo_head: true
+
+skills_invariants:
+  # Forbid harness/workflow skill names matching these case-insensitive glob patterns.
+  forbidden_name_patterns:
+    - "*-hub"
+    - "*-hub-*"
+    - "hub"
+    - "*software-process*"

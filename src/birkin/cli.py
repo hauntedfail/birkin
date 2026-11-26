@@ -78,6 +78,12 @@ class DriftInvariantsPolicy(BaseModel):
     check_code_sha_vs_repo_head: bool = True
 
 
+class SkillsInvariantsPolicy(BaseModel):
+    forbidden_name_patterns: list[str] = Field(
+        default_factory=lambda: ["*-hub", "*-hub-*", "hub", "*software-process*"]
+    )
+
+
 class HarnessPolicy(BaseModel):
     version: int = 1
     fallback_providers: FallbackPolicy = Field(default_factory=FallbackPolicy)
@@ -87,6 +93,7 @@ class HarnessPolicy(BaseModel):
     )
     live_contract: LiveContractPolicy = Field(default_factory=LiveContractPolicy)
     drift_invariants: DriftInvariantsPolicy = Field(default_factory=DriftInvariantsPolicy)
+    skills_invariants: SkillsInvariantsPolicy = Field(default_factory=SkillsInvariantsPolicy)
 
 
 def _strip_secrets(obj: Any) -> Any:
@@ -167,10 +174,30 @@ def _extract_context_length(models_map: dict[str, Any], model_id: str) -> int | 
     return None
 
 
+def _extract_skill_frontmatter_name(skill_md: Path) -> str | None:
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    if not text.startswith("---"):
+        return None
+    parts = text.split("---", 2)
+    if len(parts) < 3:
+        return None
+    try:
+        fm = yaml.safe_load(parts[1])
+    except Exception:
+        return None
+    if isinstance(fm, dict) and isinstance(fm.get("name"), str):
+        return fm["name"].strip()
+    return None
+
+
 def verify_static(
     cfg: dict[str, Any],
     policy: HarnessPolicy,
     env_path: Path | None = None,
+    skills_dir: Path | None = None,
 ) -> tuple[int, list[Finding]]:
     findings: list[Finding] = []
 
@@ -444,6 +471,46 @@ def verify_static(
                                 "or obtain owner approval to add it to birkin-policy.yaml."
                             ),
                             details={"index": idx, "provider": fb_prov, "model": fb_model},
+                        )
+                    )
+
+    # --- Layer 1D: Skill naming invariants (fail-closed) ---
+    skill_patterns = policy.skills_invariants.forbidden_name_patterns
+    if skills_dir is not None and skills_dir.is_dir() and skill_patterns:
+        for skill_md in sorted(skills_dir.rglob("SKILL.md")):
+            rel_parts = skill_md.relative_to(skills_dir).parts
+            if any(part.startswith(".") for part in rel_parts):
+                continue
+            dir_name = skill_md.parent.name
+            fm_name = _extract_skill_frontmatter_name(skill_md) or ""
+            candidates = [("directory", dir_name)]
+            if fm_name and fm_name != dir_name:
+                candidates.append(("frontmatter", fm_name))
+            for source, candidate in candidates:
+                matched = [
+                    pat
+                    for pat in skill_patterns
+                    if fnmatch.fnmatch(candidate.lower(), pat.lower())
+                ]
+                if matched:
+                    findings.append(
+                        Finding(
+                            rule="POLICY_FORBIDDEN_SKILL_NAME",
+                            layer="policy",
+                            message=(
+                                f"Skill {source} name '{candidate}' ({skill_md}) matches forbidden "
+                                f"policy pattern(s): {matched}."
+                            ),
+                            remediation=(
+                                "Rename the skill directory and SKILL.md frontmatter `name:` "
+                                "to remove forbidden naming tokens (e.g. `-hub`, `software-process`)."
+                            ),
+                            details={
+                                "path": str(skill_md),
+                                "source": source,
+                                "name": candidate,
+                                "patterns": matched,
+                            },
                         )
                     )
 
@@ -957,7 +1024,7 @@ def main(argv: list[str] | None = None) -> int:
     codes: list[int] = []
 
     if args.command in ("static", "all"):
-        c, f = verify_static(cfg, policy, env_path=env_path)
+        c, f = verify_static(cfg, policy, env_path=env_path, skills_dir=hermes_home / "skills")
         codes.append(c)
         sections["static"] = {
             "exit_code": c,

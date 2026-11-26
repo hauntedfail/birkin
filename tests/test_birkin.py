@@ -154,3 +154,44 @@ def test_cli_static_json_output(tmp_path: Path, capsys: pytest.CaptureFixture[st
     payload = json.loads(capsys.readouterr().out)
     assert payload["status"] == "PASS"
     assert payload["exit_code"] == EXIT_PASS
+
+
+def test_static_rejects_forbidden_hub_and_software_process_skills(tmp_path: Path) -> None:
+    env_path = _write_env(tmp_path)
+    skills_dir = tmp_path / "skills"
+    bad_dir = skills_dir / "software-process-hub"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "SKILL.md").write_text(
+        "---\nname: software-process-hub\ndescription: bad\n---\n# Bad\n",
+        encoding="utf-8",
+    )
+    archived = skills_dir / ".archive" / "legacy-hub"
+    archived.mkdir(parents=True)
+    (archived / "SKILL.md").write_text(
+        "---\nname: legacy-hub\ndescription: ignored\n---\n# Ignored\n",
+        encoding="utf-8",
+    )
+
+    policy = HarnessPolicy()
+    code, findings = verify_static(_valid_config(), policy, env_path=env_path, skills_dir=skills_dir)
+    assert code == EXIT_STATIC
+    rules = {f.rule for f in findings}
+    assert "POLICY_FORBIDDEN_SKILL_NAME" in rules
+    assert all(".archive" not in f.message for f in findings)
+
+
+def test_static_allows_github_workflow_and_engineering_workflow_skills(tmp_path: Path) -> None:
+    env_path = _write_env(tmp_path)
+    skills_dir = tmp_path / "skills"
+    for name in ("github-workflow", "engineering-workflow"):
+        d = skills_dir / name
+        d.mkdir(parents=True)
+        (d / "SKILL.md").write_text(
+            f"---\nname: {name}\ndescription: ok\n---\n# OK\n",
+            encoding="utf-8",
+        )
+
+    policy = HarnessPolicy()
+    code, findings = verify_static(_valid_config(), policy, env_path=env_path, skills_dir=skills_dir)
+    assert code == EXIT_PASS
+    assert findings == []
