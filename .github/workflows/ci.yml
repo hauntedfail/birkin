@@ -46,6 +46,8 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
       - name: Test (Rust unit and integration suites)
         run: cargo test --lib --test project_engine --test parsers_and_verify --test hermes_runtime --test semantic_and_hooks --test git_workflows
+      - name: Test (workflow contracts without the Lean oracle)
+        run: cargo test --test workflow_plan_scope -- --skip diff_
       - name: Calibrate Birkin rules
         run: cargo run --quiet -- eval-rules
       - name: Run Birkin self-check
