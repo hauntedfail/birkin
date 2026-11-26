@@ -1,5 +1,6 @@
 # Birkin — Hermes Harness Mechanical Verification Policy (Fail-Closed)
 # Any violation of this policy causes `birkin static` to exit with code 1.
+# Unknown keys are rejected (extra="forbid") so policy typos fail closed with exit code 5.
 version: 1
 
 fallback_providers:
@@ -9,6 +10,8 @@ fallback_providers:
   forbidden_patterns:
     - "*opus*"
     - "*claude-opus*"
+  # Enforce forbidden_patterns on model.default and auxiliary.<role>.model as well as fallbacks.
+  enforce_forbidden_globally: true
   # Require `fallback_providers` to be explicitly declared (e.g. `[]`) in config.yaml
   # rather than omitted or commented out.
   require_explicit_list: true
@@ -21,7 +24,7 @@ provider_invariants:
   # Non-empty auxiliary.<role>.model with provider=auto (or matching active provider) must be declared
   # under providers.<active>.models with an explicit positive context_length.
   require_auxiliary_models_declared: true
-  # Active provider key_env must exist and be non-empty in .env (or process env).
+  # Active provider key_env / api_key_env must exist and be non-empty in .env (or process env).
   require_key_env_present: true
 
 compression_invariants:
