@@ -14,12 +14,12 @@ Birkin is a native Rust verification engine (sub-10ms cold start) backed by a ma
 
 ## Enforced Architecture DAG (`src/`)
 
-Imports may only point downward; `birkin check` enforces this mechanically and `BirkinSpec.LayerDag` proves acyclicity:
+Imports may only point downward; `birkin check` enforces this mechanically, `birkin prove` proves layer-DAG acyclicity and extracted import compliance in Lean 4, and `BirkinSpec.LayerDag` proves acyclicity for Birkin itself:
 
 1. **core**: `constants.rs`, `glob.rs` (no internal imports)
-2. **models**: `models.rs`, `project_models.rs` -> `core`
+2. **models**: `models.rs`, `project_models.rs`, `proof_models.rs` -> `core`
 3. **utils**: `config_utils.rs`, `imports_parser.rs`, `ledger.rs` -> `core`, `models`
-4. **engines**: `static_check.rs`, `live.rs`, `drift.rs`, `guides.rs`, `project_init.rs`, `sensors.rs`, `semantic.rs`, `verify.rs` -> `core`, `models`, `utils`
+4. **engines**: `static_check.rs`, `live.rs`, `drift.rs`, `guides.rs`, `project_init.rs`, `prove.rs`, `prove_audit.rs`, `prove_lean.rs`, `sensors.rs`, `semantic.rs`, `verify.rs` -> `core`, `models`, `utils`
 5. **orchestration**: `gc.rs`, `steer.rs`, `hooks.rs`, `report.rs` -> `core`, `models`, `utils`, `engines`
 6. **cli**: `cli.rs`, `project_cli.rs`, `ops_cli.rs`, `lib.rs`, `main.rs` -> lower layers
 
@@ -50,11 +50,13 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run --quiet -- eval-rules
 cargo run --quiet -- check --no-receipt
+cargo run --quiet -- prove --no-receipt
 ```
 
 Before finishing work, record revision-pinned receipts and confirm verification:
 
 ```bash
 birkin check --run-verify
-birkin receipt verify --require check,verify
+birkin prove
+birkin receipt verify --require check,verify,prove
 ```
