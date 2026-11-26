@@ -94,6 +94,8 @@ architecture:
         - "src/cli.rs"
         - "src/project_cli.rs"
         - "src/ops_cli.rs"
+        - "src/workflow_cli.rs"
+        - "src/workflow_stage_cli.rs"
         - "src/lib.rs"
         - "src/main.rs"
       allowed_dependencies:

@@ -444,6 +444,23 @@ pub fn audit_guides(
         }
     }
 
+    // 5. Opt-in workflow contract input checks
+    if !spec.workflow.enabled_contracts.is_empty() {
+        for pin in &spec.workflow.toolchain_pin_files {
+            if !repo_root.join(pin).is_file() {
+                findings.push(ProjectFinding { rule: "WORKFLOW_MISSING_TOOLCHAIN_PIN".into(), category: "workflow".into(), severity: "warning".into(), file: Some(pin.clone()), line: None, message: format!("Configured toolchain pin file '{pin}' does not exist."), remediation: "Create the toolchain pin file or update workflow.toolchain_pin_files.".into(), details: BTreeMap::new() });
+            }
+        }
+        if spec.workflow.contract_enabled("stage") && spec.workflow.test_runners.is_empty() {
+            findings.push(ProjectFinding { rule: "WORKFLOW_NO_TEST_RUNNERS".into(), category: "workflow".into(), severity: "warning".into(), file: None, line: None, message: "Workflow contract 'stage' is enabled but workflow.test_runners is empty.".into(), remediation: "Declare at least one parser under workflow.test_runners in .birkin/config.yaml.".into(), details: BTreeMap::new() });
+        }
+        if let Some(ref wl) = spec.workflow.exclude_whitelist_path {
+            if !repo_root.join(wl).is_file() {
+                findings.push(ProjectFinding { rule: "WORKFLOW_MISSING_EXCLUDE_WHITELIST".into(), category: "workflow".into(), severity: "warning".into(), file: Some(wl.clone()), line: None, message: format!("Configured Sawyer exclude whitelist '{wl}' does not exist."), remediation: "Create the whitelist file or update workflow.exclude_whitelist_path.".into(), details: BTreeMap::new() });
+            }
+        }
+    }
+
     let _ = found_entry;
     findings
 }
@@ -558,6 +575,19 @@ pub fn build_readiness_scorecard(
             "status": if !ledger_entries.is_empty() || has_hooks { "PASS" } else { "WARN" },
             "git_pre_commit_wired": has_hooks,
             "receipt_count": ledger_entries.len(),
+        },
+        "workflow": {
+            "status": if spec.workflow.enabled_contracts.is_empty() { "OPT_IN" } else { grade(true, &by_cat("workflow")) },
+            "enabled_contracts": spec.workflow.enabled_contracts,
+            "inputs_configured": {
+                "toolchain_pin_files": spec.workflow.toolchain_pin_files,
+                "missing_toolchain_pin_files": spec.workflow.toolchain_pin_files.iter().filter(|p| !repo_root.join(p).is_file()).collect::<Vec<_>>(),
+                "test_runners": spec.workflow.test_runners.iter().map(|r| &r.name).collect::<Vec<_>>(),
+                "exclude_whitelist_path": spec.workflow.exclude_whitelist_path,
+                "exclude_whitelist_exists": spec.workflow.exclude_whitelist_path.as_ref().map(|p| repo_root.join(p).is_file()),
+                "require_plan_receipt": spec.workflow.require_plan_receipt,
+            },
+            "findings": by_cat("workflow").len(),
         },
     })
 }

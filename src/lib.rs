@@ -7,7 +7,7 @@
 //!   3. engines: static_check, live, drift, guides, project_init, prove, prove_audit, prove_lean, sensors, semantic, verify,
 //!      plan_contract, scope_contract, authority_contract, stage_contract, review_closure
 //!   4. orchestration: gc, steer, hooks, report
-//!   5. cli: project_cli, ops_cli, cli, lib, main
+//!   5. cli: project_cli, ops_cli, workflow_cli, workflow_stage_cli, cli, lib, main
 
 pub mod authority_contract;
 pub mod cli;
@@ -40,4 +40,6 @@ pub mod stage_contract;
 pub mod static_check;
 pub mod steer;
 pub mod verify;
+pub mod workflow_cli;
 pub mod workflow_models;
+pub mod workflow_stage_cli;

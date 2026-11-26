@@ -62,7 +62,15 @@ birkin receipt verify --require check,verify,prove
 | `birkin eval-rules` | Check custom rules against their passing and failing examples. |
 | `birkin review --staged` | Run configured semantic review rules on a staged diff using an OpenAI-compatible endpoint. |
 | `birkin steer` / `birkin gc` | Inspect recurring findings in the ledger and find rules to revisit. |
+| `birkin plan verify <plan.json>` | Validate execution-plan DAG order, blocking propagation, and completion evidence. |
+| `birkin unit admit --plan <plan.json> --task <id> --role <role> --tier <R\|W\|F>` | Enforce both plan dispatchability and role/tier authority before delegating a unit. |
+| `birkin unit verify-scope --plan <plan.json> --task <id> [--staged]` | Verify changed or staged paths stay inside `allowed_paths` and disjoint from active units. |
+| `birkin stage verify --stage <stage>` | Verify lifecycle stage admission from observed receipts, Git tree, toolchain pins, test transcripts, Sawyer state, and attested review/CI/release evidence. |
+| `birkin sawyer verify --pack <pack.json> [--phase preflight\|staged\|post-push]` | Verify exact staging, exclusion whitelist, commit signature, and remote head readback. |
+| `birkin review-closure verify <review-state.json>` | Verify canonical review items are classified, replied with URLs where resolved, verified, and clear of open clarifications. |
 | `birkin static` / `birkin live --probe` / `birkin drift` | Check Hermes configuration, live provider contracts, or gateway drift. See the [example policy](birkin-policy.example.yaml). |
+
+Workflow contract subcommands are opt-in per repository via the optional `workflow:` section in `.birkin/config.yaml` (`enabled_contracts`, `toolchain_pin_files`, `exclude_whitelist_path`, `test_runners`, `require_plan_receipt`). Existing configs without `workflow:` continue working unchanged. Every workflow subcommand supports `--json` and `--no-receipt`, appends revision-bound hash-chained receipts when telemetry is enabled, and returns Birkin's standard exit codes (`0` pass, `1` contract violation, `5` schema or I/O error). In `birkin stage verify`, facts Birkin can observe directly (receipts, tree binding, toolchain pins, parsed test counts, Sawyer Git state, remote head) are never accepted as caller booleans, while external facts (`review_passed`, `ci_passed`, `release_authorized`) require explicit evidence files and are marked `attested` in both JSON output and ledger receipts.
 
 ## Verification model
 

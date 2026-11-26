@@ -288,6 +288,49 @@ pub fn render_agent_guide(
     lines.push("\n## Active Invariants".into());
     lines.push(format!("- {}", invs.join("; ")));
 
+    lines.push("\n## Workflow Contracts".into());
+    if spec.workflow.enabled_contracts.is_empty() {
+        lines.push("- none enabled (opt-in via `workflow.enabled_contracts` in `.birkin/config.yaml`)".into());
+    } else {
+        lines.push(format!("- enabled: `{}`", spec.workflow.enabled_contracts.join(", ")));
+        let pins = if spec.workflow.toolchain_pin_files.is_empty() {
+            "none configured".to_string()
+        } else {
+            spec.workflow
+                .toolchain_pin_files
+                .iter()
+                .map(|p| {
+                    let st = if repo_root.join(p).is_file() { "ok" } else { "missing" };
+                    format!("{p} ({st})")
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let runners = if spec.workflow.test_runners.is_empty() {
+            "none configured".to_string()
+        } else {
+            spec.workflow
+                .test_runners
+                .iter()
+                .map(|r| format!("{} [{}]", r.name, r.parser))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let whitelist = match &spec.workflow.exclude_whitelist_path {
+            Some(wl) => {
+                let st = if repo_root.join(wl).is_file() { "ok" } else { "missing" };
+                format!("{wl} ({st})")
+            }
+            None => "none configured".to_string(),
+        };
+        lines.push(format!("- toolchain_pin_files: {pins}"));
+        lines.push(format!("- test_runners: {runners}"));
+        lines.push(format!("- exclude_whitelist_path: {whitelist}"));
+        if spec.workflow.require_plan_receipt {
+            lines.push("- require_plan_receipt: true".into());
+        }
+    }
+
     if let Some(st) = steering {
         if let Some(hotspots) = st.get("hotspots").and_then(Value::as_array) {
             if !hotspots.is_empty() {

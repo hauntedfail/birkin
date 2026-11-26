@@ -17,11 +17,11 @@ Birkin is a native Rust verification engine (sub-10ms cold start) backed by a ma
 Imports may only point downward; `birkin check` enforces this mechanically, `birkin prove` proves layer-DAG acyclicity and extracted import compliance in Lean 4, and `BirkinSpec.LayerDag` proves acyclicity for Birkin itself:
 
 1. **core**: `constants.rs`, `glob.rs` (no internal imports)
-2. **models**: `models.rs`, `project_models.rs`, `proof_models.rs` -> `core`
+2. **models**: `models.rs`, `project_models.rs`, `proof_models.rs`, `workflow_models.rs` -> `core`
 3. **utils**: `config_utils.rs`, `imports_parser.rs`, `ledger.rs` -> `core`, `models`
-4. **engines**: `static_check.rs`, `live.rs`, `drift.rs`, `guides.rs`, `project_init.rs`, `prove.rs`, `prove_audit.rs`, `prove_lean.rs`, `sensors.rs`, `semantic.rs`, `verify.rs` -> `core`, `models`, `utils`
+4. **engines**: `static_check.rs`, `live.rs`, `drift.rs`, `guides.rs`, `project_init.rs`, `prove.rs`, `prove_audit.rs`, `prove_lean.rs`, `sensors.rs`, `semantic.rs`, `verify.rs`, `plan_contract.rs`, `scope_contract.rs`, `authority_contract.rs`, `stage_contract.rs`, `review_closure.rs` -> `core`, `models`, `utils`
 5. **orchestration**: `gc.rs`, `steer.rs`, `hooks.rs`, `report.rs` -> `core`, `models`, `utils`, `engines`
-6. **cli**: `cli.rs`, `project_cli.rs`, `ops_cli.rs`, `lib.rs`, `main.rs` -> lower layers
+6. **cli**: `cli.rs`, `project_cli.rs`, `ops_cli.rs`, `workflow_cli.rs`, `workflow_stage_cli.rs`, `lib.rs`, `main.rs` -> lower layers
 
 ## Formal Kernel (`lean/BirkinSpec/`)
 
@@ -31,6 +31,7 @@ Zero `sorry` placeholders permitted:
 - `LayerDag.lean`: topological rank soundness and acyclicity of Birkin's 6-layer DAG.
 - `Receipt.lean`: fail-closed hash-chain tamper detection and admission-gate invariants.
 - `Policy.lean`: denylist dominance over allowlists and exact compression bounds.
+- `PlanContract.lean`, `ScopeContract.lean`, `AuthorityContract.lean`, `StageAdmission.lean`, `ReviewClosure.lean`: workflow-contract invariants exposed via `birkin plan|unit|stage|sawyer|review-closure`.
 - `Oracle.lean`: executable `birkin-oracle` differentially tested against Rust in `cargo test`.
 
 ## Non-Negotiable Invariants
@@ -59,4 +60,15 @@ Before finishing work, record revision-pinned receipts and confirm verification:
 birkin check --run-verify
 birkin prove
 birkin receipt verify --require check,verify,prove
+```
+
+Opt-in workflow contract commands (`--json`, `--no-receipt`, exit codes `0`/`1`/`5`):
+
+```bash
+birkin plan verify <plan.json>
+birkin unit admit --plan <plan.json> --task <id> --role <role> --tier <R|W|F>
+birkin unit verify-scope --plan <plan.json> --task <id> --staged
+birkin stage verify --stage <stage> [--test-transcript <file>] [--sawyer-pack <pack.json>]
+birkin sawyer verify --pack <pack.json> --phase <preflight|staged|post-push>
+birkin review-closure verify <review-state.json>
 ```

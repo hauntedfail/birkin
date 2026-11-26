@@ -51,6 +51,8 @@ jobs:
         run: cargo test --test workflow_plan_scope --test workflow_scope_paths --test workflow_plan_schema -- --skip diff_
       - name: Test (authority, stage, and review contracts without the Lean oracle or Unix fixtures)
         run: cargo test --test workflow_authority_stage_review -- --skip diff_ --skip sawyer_
+      - name: Test (workflow CLI end-to-end without Unix-only fixtures)
+        run: cargo test --test workflow_cli_e2e -- --skip unix_
       - name: Calibrate Birkin rules
         run: cargo run --quiet -- eval-rules
       - name: Run Birkin self-check

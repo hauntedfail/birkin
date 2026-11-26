@@ -16,6 +16,7 @@ use crate::project_cli::{
 };
 use crate::report::{format_human, write_state_atomic};
 use crate::static_check::verify_static;
+use crate::workflow_cli::{dispatch_workflow, WorkflowCommand};
 use chrono::Utc;
 use clap::{Args, Parser, Subcommand};
 use serde_json::{json, Map, Value};
@@ -187,6 +188,9 @@ pub enum Commands {
         #[command(subcommand)]
         sub: HermesSubcommand,
     },
+    /// Workflow-contract commands (plan, unit, stage, sawyer, review-closure)
+    #[command(flatten)]
+    Workflow(WorkflowCommand),
 }
 
 #[derive(Subcommand, Debug)]
@@ -538,5 +542,6 @@ pub fn dispatch(cli: Cli) -> i32 {
                 no_write_state,
             ),
         },
+        Commands::Workflow(cmd) => dispatch_workflow(cmd),
     }
 }
