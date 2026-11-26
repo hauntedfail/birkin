@@ -242,7 +242,9 @@ pub fn install_git_pre_commit_hook(repo_root: &Path) -> Result<Value, String> {
             return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
         }
         let path = String::from_utf8(out.stdout).map_err(|e| e.to_string())?;
-        Ok(PathBuf::from(path.trim_end_matches(['\r', '\n'])))
+        Ok(PathBuf::from(path.trim_end_matches(['\r', '\n']))
+            .components()
+            .collect())
     };
     let hooks = resolve(&["--git-path", "hooks"])?;
     let standard = resolve(&["--git-common-dir"])?.join("hooks");
