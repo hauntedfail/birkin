@@ -1,6 +1,7 @@
-# Birkin
-
-<p align="center"><img src="assets/logo/birkin-512.png" width="256" height="256" alt="Birkin logo, a cognac leather bag"></p>
+<h1 align="center">
+  <img src="assets/logo/birkin-512.png" width="160" height="160" alt=""><br>
+  Birkin
+</h1>
 
 Birkin checks a coding agent's changes against the rules of your Git repository. Define which modules may depend on each other, which instructions the agent should read, and which tests must pass. The same CLI can report a violation while the agent edits and record which checks passed for a specific revision in CI.
 
