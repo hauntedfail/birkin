@@ -39,10 +39,11 @@ Birkin detects Python, Go, Rust, Lean, and JavaScript or TypeScript project file
 
 ```sh
 birkin check --run-verify
-birkin receipt verify --require check,verify
+birkin prove
+birkin receipt verify --require check,verify,prove
 ```
 
-`check --run-verify` runs the configured shell commands as well as the built-in checks. `receipt verify` checks the hash chain in the local ledger and looks for passing receipts matching the current revision, working tree, and configuration. Run both in the same CI job to use their exit codes as a merge condition.
+`check --run-verify` runs the configured shell commands as well as the built-in checks. `prove` compiles the repository's layer DAG, extracted import graph, declarative state machines, and boundary policies into a self-contained Lean 4 proof module, verifies it with Lean's kernel, and audits custom Lean projects with `#print axioms`. `receipt verify` checks the hash chain in the local ledger and looks for passing receipts matching the current revision, working tree, and configuration. Run these in the same CI job to use their exit codes as a merge condition.
 
 ## Agent integrations
 
@@ -56,7 +57,8 @@ birkin receipt verify --require check,verify
 
 | Command | Use |
 | --- | --- |
-| `birkin audit` | Inspect repository readiness across six areas, including architecture and observability. |
+| `birkin prove` | Compile repository architecture, state machines, and policies to Lean 4, verify them with Lean's kernel, and audit custom Lean projects. |
+| `birkin audit` | Inspect repository readiness across seven areas, including architecture, proofs, and observability. |
 | `birkin eval-rules` | Check custom rules against their passing and failing examples. |
 | `birkin review --staged` | Run configured semantic review rules on a staged diff using an OpenAI-compatible endpoint. |
 | `birkin steer` / `birkin gc` | Inspect recurring findings in the ledger and find rules to revisit. |
@@ -64,7 +66,12 @@ birkin receipt verify --require check,verify
 
 ## Verification model
 
-The Rust CLI performs repository checks. The [Lean 4 specification](lean/BirkinSpec.lean) models selected properties of exit-code ordering, layer dependencies, receipts, and policy decisions. [Differential tests](tests/lean_oracle_diff.rs) compare Rust behavior with the executable Lean reference on test inputs. The proofs apply to those models. Each project's configured commands determine what a passing verification covers.
+Birkin separates fast local sensors from kernel-checked formal proofs:
+
+- **Fast local sensors (`birkin check`)**: Native Rust CLI (sub-10ms cold start, no Lean required at edit time).
+- **Per-repository formal proofs (`birkin prove`)**: Compiles `.birkin/config.yaml` (`architecture.layers`, `forbidden_imports`, `proofs.state_machines`, `proofs.policies`) together with extracted codebase import facts into a self-contained Lean 4 module, verifies every theorem strictly in Lean's kernel (no `sorry`, no `native_decide`, standard axioms only), and builds/audits repo-owned `proofs.lean_projects`.
+- **Birkin's own kernel specification**: The [Lean 4 specification](lean/BirkinSpec.lean) models exit-code ordering, layer dependencies, receipts, and policy decisions, and [differential tests](tests/lean_oracle_diff.rs) compare Rust behavior with the executable Lean reference.
+- **Trusted Computing Base (TCB)**: Lean 4's kernel guarantees DAG acyclicity, compliance of the extracted import graph, exhaustive state-machine/policy safety, and axiom hygiene. Multi-language import extraction and Git working-tree snapshotting run in Rust and form the host TCB.
 
 | Exit code | Meaning |
 | --- | --- |
@@ -85,6 +92,7 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run --quiet -- eval-rules
 cargo run --quiet -- check --no-receipt
+cargo run --quiet -- prove --no-receipt
 ```
 
 For a false positive or an unexpected pass, [open an issue](https://github.com/hauntedfail/birkin/issues) with the Birkin version, the smallest rule and input that reproduce it, and the expected and actual output. The [repository map](AGENTS.md) lists implementation modules and contributor conventions.

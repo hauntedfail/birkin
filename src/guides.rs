@@ -505,6 +505,18 @@ pub fn build_readiness_scorecard(
         .collect();
     let verify_names: Vec<&str> = spec.verify.commands.iter().map(|c| c.name.as_str()).collect();
 
+    let has_proof_obligations = (spec.proofs.prove_architecture && has_layers)
+        || !spec.proofs.state_machines.is_empty()
+        || !spec.proofs.policies.is_empty()
+        || !spec.proofs.lean_projects.is_empty();
+    let prove_receipts = ledger_entries
+        .iter()
+        .filter(|e| {
+            e.get("command").and_then(Value::as_str) == Some("prove")
+                && e.get("outcome").and_then(Value::as_str) == Some("PASS")
+        })
+        .count();
+
     json!({
         "orientation": {
             "status": grade(has_entry_doc && spec_file.is_some(), &orient_f),
@@ -533,6 +545,14 @@ pub fn build_readiness_scorecard(
             "semantic_rules": spec.semantic.rules.len(),
             "semantic_enabled": spec.semantic.enabled,
             "findings": inv_f.len(),
+        },
+        "proofs": {
+            "status": if has_proof_obligations { "PASS" } else { "WARN" },
+            "prove_architecture": spec.proofs.prove_architecture && has_layers,
+            "state_machines": spec.proofs.state_machines.len(),
+            "policies": spec.proofs.policies.len(),
+            "lean_projects": spec.proofs.lean_projects.len(),
+            "passing_prove_receipts": prove_receipts,
         },
         "observability": {
             "status": if !ledger_entries.is_empty() || has_hooks { "PASS" } else { "WARN" },

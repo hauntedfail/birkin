@@ -197,6 +197,7 @@ pub fn handle_audit(path: &Path, explicit_spec: Option<&Path>, as_json: bool) ->
             "architecture",
             "admission",
             "sensors",
+            "proofs",
             "observability",
         ] {
             if let Some(ax) = sc.get(axis) {

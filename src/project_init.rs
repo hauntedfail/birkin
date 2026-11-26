@@ -4,6 +4,7 @@ use crate::project_models::{
     ArchitectureSpec, InvariantsSpec, OrientationSpec, ProjectIdentity, ProjectSpec, VerifyCommand,
     VerifySpec,
 };
+use crate::proof_models::{LeanProjectSpec, ProofsSpec};
 use serde_json::Value;
 use std::fs;
 use std::path::Path;
@@ -66,21 +67,28 @@ pub fn detect_project_spec(repo_root: &Path) -> ProjectSpec {
         });
     }
 
+    let mut lean_projects: Vec<LeanProjectSpec> = Vec::new();
     if repo_root.join("lakefile.toml").is_file()
         || repo_root.join("lakefile.lean").is_file()
         || repo_root.join("lean").join("lakefile.toml").is_file()
     {
         languages.push("lean".into());
-        let cmd = if repo_root.join("lean").join("lakefile.toml").is_file() {
-            "cd lean && lake build"
+        let (cmd, lean_dir) = if repo_root.join("lean").join("lakefile.toml").is_file() {
+            ("cd lean && lake build", "lean")
         } else {
-            "lake build"
+            ("lake build", ".")
         };
         commands.push(VerifyCommand {
             name: "lean-proofs".into(),
             cmd: cmd.into(),
             kind: "build".into(),
             timeout_seconds: 300,
+        });
+        lean_projects.push(LeanProjectSpec {
+            name: "lean-spec".into(),
+            dir: lean_dir.into(),
+            modules: Vec::new(),
+            theorems: Vec::new(),
         });
     }
 
@@ -167,6 +175,10 @@ pub fn detect_project_spec(repo_root: &Path) -> ProjectSpec {
             check_ci_parity: true,
         },
         invariants: InvariantsSpec::default(),
+        proofs: ProofsSpec {
+            lean_projects,
+            ..ProofsSpec::default()
+        },
         ..ProjectSpec::default()
     }
 }
@@ -291,6 +303,7 @@ pub fn render_agent_guide(
 
     lines.push("\n## Fast Verification Loop".into());
     lines.push("- After edits: `birkin check --files <changed-files>`".into());
-    lines.push("- Before commit/PR: `birkin check --run-verify` && `birkin receipt verify`".into());
+    lines.push("- Formal proofs: `birkin prove`".into());
+    lines.push("- Before commit/PR: `birkin check --run-verify` && `birkin prove` && `birkin receipt verify --require check,verify,prove`".into());
     lines.join("\n") + "\n"
 }

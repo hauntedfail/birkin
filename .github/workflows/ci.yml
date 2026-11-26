@@ -32,6 +32,8 @@ jobs:
         run: cargo run --quiet -- eval-rules
       - name: Run Birkin self-check
         run: cargo run --quiet -- check --no-receipt
+      - name: Run Birkin formal proofs
+        run: cargo run --quiet -- prove --no-receipt
 
   verify-windows:
     runs-on: windows-latest

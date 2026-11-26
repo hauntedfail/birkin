@@ -6,11 +6,12 @@ use crate::hooks::{
     extract_claude_edited_paths, install_claude_hook, install_git_pre_commit_hook,
     install_hermes_plugin, read_claude_stdin_payload, run_post_edit_hook, run_pre_commit_hook,
 };
-use crate::ledger::verify_receipts_for_current_state;
+use crate::ledger::{append_receipt, verify_receipts_for_current_state};
 use crate::project_init::detect_project_spec;
 use crate::project_models::{find_repo_root, find_spec_file, load_project_spec, ProjectSpec};
+use crate::prove::run_prove;
 use crate::steer::analyze_telemetry;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 fn load_or_detect(
@@ -312,4 +313,142 @@ pub fn handle_gc(path: &Path, explicit_spec: Option<&Path>, as_json: bool) -> i3
     );
     emit(&report, as_json, &line);
     if errors > 0 { EXIT_STATIC } else { EXIT_PASS }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn handle_prove(
+    path: &Path,
+    explicit_spec: Option<&Path>,
+    emit_path: Option<&Path>,
+    no_receipt: bool,
+    skip_lean_projects: bool,
+    surface: &str,
+    as_json: bool,
+) -> i32 {
+    let (repo_root, spec, spec_path) = match load_or_detect(path, explicit_spec) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            return EXIT_TOOL_ERROR;
+        }
+    };
+
+    let outcome = run_prove(&repo_root, &spec, emit_path, skip_lean_projects);
+    let passed = outcome.exit_code == EXIT_PASS;
+
+    let mut receipt: Option<Map<String, Value>> = None;
+    if spec.telemetry.enabled && !no_receipt {
+        let fvals: Vec<Value> = outcome
+            .findings
+            .iter()
+            .filter_map(|f| serde_json::to_value(f).ok())
+            .collect();
+        let mut meta = Map::new();
+        meta.insert("theorems_proved".into(), json!(outcome.theorems_proved.len()));
+        meta.insert("architecture_dag_proved".into(), json!(outcome.architecture_dag_proved));
+        meta.insert("layer_edges_proved".into(), json!(outcome.layer_edges_proved));
+        meta.insert("forbidden_imports_proved".into(), json!(outcome.forbidden_imports_proved));
+        meta.insert("state_machines".into(), json!(outcome.state_machine_ids));
+        meta.insert("policies".into(), json!(outcome.policy_ids));
+        meta.insert("custom_projects".into(), json!(outcome.custom_projects));
+        if let Ok(rcpt) = append_receipt(
+            &repo_root,
+            &spec,
+            "prove",
+            surface,
+            if passed { "PASS" } else { "FAIL" },
+            outcome.exit_code,
+            outcome.duration_ms,
+            &fvals,
+            &outcome.files_checked,
+            meta,
+        ) {
+            receipt = Some(rcpt);
+        }
+    }
+
+    let report = json!({
+        "command": "prove",
+        "project": spec.project.name,
+        "repo": repo_root.to_string_lossy(),
+        "spec_path": spec_path.as_ref().map(|p| p.to_string_lossy().into_owned()),
+        "status": if passed { "PASS" } else { "FAIL" },
+        "exit_code": outcome.exit_code,
+        "duration_ms": outcome.duration_ms as u64,
+        "emitted_path": outcome.emitted_path,
+        "architecture_dag_proved": outcome.architecture_dag_proved,
+        "total_import_edges": outcome.total_import_edges,
+        "layer_edges_proved": outcome.layer_edges_proved,
+        "forbidden_imports_proved": outcome.forbidden_imports_proved,
+        "state_machines": outcome.state_machine_ids,
+        "policies": outcome.policy_ids,
+        "custom_projects": outcome.custom_projects,
+        "theorems_proved": outcome.theorems_proved,
+        "axioms_audited": outcome.axioms_audited,
+        "tcb": "Lean 4 kernel verifies DAG acyclicity, extracted import-graph compliance, state-machine/policy theorems, and custom proofs; Rust import extraction and git tree snapshotting form the host TCB.",
+        "findings": outcome.findings,
+        "receipt": receipt,
+    });
+
+    let mut lines = vec![format!(
+        "birkin prove ({}): status={} theorems={} findings={} ({}ms)",
+        spec.project.name,
+        if passed { "PASS" } else { "FAIL" },
+        outcome.theorems_proved.len(),
+        outcome.findings.len(),
+        outcome.duration_ms as u64,
+    )];
+    let proved_tag = if passed { "PROVED" } else { "FAILED" };
+    if outcome.architecture_dag_proved {
+        lines.push(format!(
+            "  [{proved_tag}] architecture DAG acyclic; {} unique layer pair(s) from {} extracted import edge(s)",
+            outcome.layer_edges_proved, outcome.total_import_edges
+        ));
+    }
+    if outcome.forbidden_imports_proved > 0 || !spec.architecture.forbidden_imports.is_empty() {
+        lines.push(format!(
+            "  [{proved_tag}] forbidden imports: {} scoped import fact(s) verified",
+            outcome.forbidden_imports_proved
+        ));
+    }
+    if !outcome.state_machine_ids.is_empty() {
+        lines.push(format!(
+            "  [{proved_tag}] state machines: {}",
+            outcome.state_machine_ids.join(", ")
+        ));
+    }
+    if !outcome.policy_ids.is_empty() {
+        lines.push(format!(
+            "  [{proved_tag}] policies: {}",
+            outcome.policy_ids.join(", ")
+        ));
+    }
+    for cp in &outcome.custom_projects {
+        lines.push(format!(
+            "  [{}] lean project '{}' ({}, audited={})",
+            cp["status"].as_str().unwrap_or("?"),
+            cp["name"].as_str().unwrap_or(""),
+            cp["dir"].as_str().unwrap_or(""),
+            cp["theorems_audited"].as_u64().unwrap_or(0),
+        ));
+    }
+    if let Some(ref ep) = outcome.emitted_path {
+        lines.push(format!("  emitted: {ep}"));
+    }
+    for f in &outcome.findings {
+        let loc = match (&f.file, f.line) {
+            (Some(file), Some(line)) => format!("{file}:{line}"),
+            (Some(file), None) => file.clone(),
+            _ => "<repo>".to_string(),
+        };
+        lines.push(format!(
+            "  - [{}] {} ({loc}): {}",
+            f.severity.to_uppercase(),
+            f.rule,
+            f.message
+        ));
+        lines.push(format!("    remediation: {}", f.remediation));
+    }
+    emit(&report, as_json, &lines.join("\n"));
+    outcome.exit_code
 }

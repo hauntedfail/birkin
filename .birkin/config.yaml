@@ -40,6 +40,7 @@ architecture:
       paths:
         - "src/models.rs"
         - "src/project_models.rs"
+        - "src/proof_models.rs"
       allowed_dependencies:
         - core
       remediation: "Model modules may only depend on core."
@@ -59,6 +60,9 @@ architecture:
         - "src/drift.rs"
         - "src/guides.rs"
         - "src/project_init.rs"
+        - "src/prove.rs"
+        - "src/prove_audit.rs"
+        - "src/prove_lean.rs"
         - "src/sensors.rs"
         - "src/semantic.rs"
         - "src/verify.rs"
@@ -100,8 +104,10 @@ architecture:
         - "src/glob.rs"
         - "src/models.rs"
         - "src/project_models.rs"
+        - "src/proof_models.rs"
         - "src/imports_parser.rs"
         - "src/static_check.rs"
+        - "src/prove_lean.rs"
       forbid_patterns:
         - "ureq*"
         - "reqwest*"
@@ -131,6 +137,10 @@ verify:
       cmd: "cargo run --quiet -- check --no-receipt"
       kind: custom
       timeout_seconds: 60
+    - name: self-prove
+      cmd: "cargo run --quiet -- prove --no-receipt"
+      kind: custom
+      timeout_seconds: 180
   check_ci_parity: true
 
 invariants:
@@ -146,6 +156,7 @@ invariants:
     - id: no-sorry-in-lean
       globs:
         - "lean/**/*.lean"
+        - "src/**/*.lean"
       pattern: "\\bsorry\\b"
       severity: error
       message: "Unproved `sorry` placeholder found in Lean 4 formal specification."
@@ -158,6 +169,9 @@ invariants:
       globs:
         - "src/sensors.rs"
         - "src/guides.rs"
+        - "src/prove.rs"
+        - "src/prove_audit.rs"
+        - "src/prove_lean.rs"
         - "src/semantic.rs"
         - "src/ledger.rs"
         - "src/steer.rs"
@@ -215,3 +229,40 @@ telemetry:
   thrash_threshold: 3
   thrash_window_minutes: 30
   stale_rule_min_runs: 20
+
+proofs:
+  timeout_seconds: 120
+  require_zero_sorry: true
+  require_standard_axioms_only: true
+  prove_architecture: true
+  state_machines:
+    - id: admission-gate
+      states: [unverified, checked, verified, proved, admitted]
+      initial: unverified
+      terminal: [admitted]
+      transitions:
+        - { from: unverified, to: checked, label: check }
+        - { from: checked, to: verified, label: verify }
+        - { from: verified, to: proved, label: prove }
+        - { from: proved, to: admitted, label: admit }
+      forbidden_transitions:
+        - { from: unverified, to: admitted }
+        - { from: checked, to: admitted }
+      require_terminal_sink: true
+      require_all_states_reachable: true
+  policies:
+    - id: hermes-model-access
+      deny_patterns: ["*opus*"]
+      allow_patterns: ["group/makima", "group/lvmh", "auto/*"]
+      must_deny: ["claude-opus-5-5", "anthropic/opus"]
+      must_allow: ["group/makima", "group/lvmh"]
+      require_deny_dominance: true
+  lean_projects:
+    - name: birkin-spec
+      dir: lean
+      modules: [BirkinSpec]
+      theorems:
+        - BirkinSpec.ExitCode.combineAll_eq_pass_iff
+        - BirkinSpec.birkin_six_layer_dag_acyclic
+        - BirkinSpec.verifyAdmission_implies_all_matched
+        - BirkinSpec.fallbackAllowed_forbidden_rejected

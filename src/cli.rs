@@ -9,7 +9,7 @@ use crate::live::verify_live;
 use crate::models::RuntimePolicy;
 use crate::ops_cli::{
     handle_gc, handle_hook_post_edit, handle_hook_pre_commit, handle_hook_pre_complete,
-    handle_install_hooks, handle_receipt_verify, handle_steer,
+    handle_install_hooks, handle_prove, handle_receipt_verify, handle_steer,
 };
 use crate::project_cli::{
     handle_audit, handle_check, handle_eval_rules, handle_guide, handle_init, handle_review,
@@ -85,6 +85,19 @@ pub enum Commands {
         no_guides: bool,
         #[arg(long)]
         no_receipt: bool,
+        #[arg(long, default_value = "cli")]
+        surface: String,
+    },
+    /// Compile repository invariants into Lean 4 and verify them with Lean's kernel
+    Prove {
+        #[command(flatten)]
+        common: ProjectCommonArgs,
+        #[arg(long)]
+        emit: Option<PathBuf>,
+        #[arg(long)]
+        no_receipt: bool,
+        #[arg(long)]
+        skip_lean_projects: bool,
         #[arg(long, default_value = "cli")]
         surface: String,
     },
@@ -383,6 +396,21 @@ pub fn dispatch(cli: Cli) -> i32 {
             run_verify,
             no_guides,
             no_receipt,
+            &surface,
+            common.as_json,
+        ),
+        Commands::Prove {
+            common,
+            emit,
+            no_receipt,
+            skip_lean_projects,
+            surface,
+        } => handle_prove(
+            &common.path,
+            common.spec.as_deref(),
+            emit.as_deref(),
+            no_receipt,
+            skip_lean_projects,
             &surface,
             common.as_json,
         ),

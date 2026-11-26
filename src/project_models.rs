@@ -1,5 +1,6 @@
 //! Strict fail-closed models for per-repository Birkin specifications (.birkin/config.yaml).
 
+use crate::proof_models::ProofsSpec;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
@@ -334,6 +335,8 @@ pub struct ProjectSpec {
     pub semantic: SemanticSpec,
     #[serde(default)]
     pub telemetry: TelemetrySpec,
+    #[serde(default)]
+    pub proofs: ProofsSpec,
 }
 
 impl Default for ProjectSpec {
@@ -347,6 +350,7 @@ impl Default for ProjectSpec {
             invariants: InvariantsSpec::default(),
             semantic: SemanticSpec::default(),
             telemetry: TelemetrySpec::default(),
+            proofs: ProofsSpec::default(),
         }
     }
 }
@@ -402,6 +406,7 @@ impl ProjectSpec {
                 ));
             }
         }
+        self.proofs.validate()?;
         Ok(())
     }
 }
