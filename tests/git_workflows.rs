@@ -147,8 +147,12 @@ fn installer_preserves_custom_and_unmanaged_hooks() {
             .unwrap();
         assert!(!out.status.success());
         let diagnostic = String::from_utf8_lossy(&out.stderr);
+        let canonical = fs::canonicalize(&hook).unwrap_or_else(|_| hook.clone());
+        let canonical_str = canonical.to_string_lossy();
+        let canonical_trimmed = canonical_str.strip_prefix(r"\\?\").unwrap_or(&canonical_str);
         assert!(
-            diagnostic.contains(hook.to_str().unwrap())
+            (diagnostic.contains(hook.to_str().unwrap())
+                || diagnostic.contains(canonical_trimmed))
                 && diagnostic.contains("birkin hook pre-commit"),
             "{diagnostic}"
         );
