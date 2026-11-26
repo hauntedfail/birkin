@@ -2,95 +2,88 @@
 
 <p align="center"><img src="assets/logo/birkin-512.png" width="256" height="256" alt="Birkin logo, a cognac leather bag"></p>
 
-Native **Rust** verification engine backed by a machine-checked **Lean 4** formal kernel (`BirkinSpec`), serving coding agents across multi-language repositories (Python, Go, Rust, Lean 4, TypeScript/JavaScript) plus fail-closed **Hermes Agent** runtime verification.
+Birkin checks a coding agent's changes against the rules of your Git repository. Define which modules may depend on each other, which instructions the agent should read, and which tests must pass. The same CLI can report a violation while the agent edits and record which checks passed for a specific revision in CI.
 
-## Architecture: Rust Engine + Lean 4 Proof Kernel
+## Try it on Birkin itself
 
-Birkin pairs a zero-runtime single native binary (sub-10ms cold start for PostToolUse / pre-commit hooks) with machine-checked Lean 4 theorems and an executable reference oracle (`birkin-oracle`) differentially tested against the Rust implementation in `cargo test`:
+With Git and a Rust toolchain including Cargo, run the following in a terminal. The first check uses the rules shipped in this repository and works locally without an agent or API key.
 
-1. **Formal Kernel ([lean/lakefile.toml](lean/lakefile.toml))** — Zero-`sorry` Lean 4 proofs covering exit-code severity lattice laws (`ExitCode.lean`), layer DAG acyclicity (`LayerDag.lean`), append-only receipt hash-chain soundness (`Receipt.lean`), and denylist-dominating policy invariants (`Policy.lean`).
-2. **Feedforward Guides** — Steer agents before edits via a strict, versioned [.birkin/config.yaml](.birkin/config.yaml) (`#[serde(deny_unknown_fields)]`), concise map-style `AGENTS.md` line budgets, verified doc links, and local-vs-CI command parity.
-3. **Computational Sensors** — Deterministic multi-language static import parsing (Python, Go, Rust, TypeScript/JS) enforcing architecture layer DAG acyclicity and boundaries, forbidden imports, file size budgets, secret/debug/prose invariants, and custom regex rules — emitting LLM-optimized remediation instructions at edit time.
-4. **Inferential Sensors + Self-Calibration** — Vendor-agnostic narrow semantic review rules over diffs or files via any OpenAI-compatible endpoint, with mandatory `examples_pass` / `examples_fail` calibration (`birkin eval-rules`).
-5. **Append-Only Revision-Pinned Receipts** — Every check, hook, and verify run appends a SHA-256 hash-chained receipt outside the repo working tree (`~/.birkin/ledger/`) bound to exact `git HEAD`, working-tree digest, and `spec_sha256`.
-6. **Observability-Driven Steering & Garbage Collection** — Distills receipts into recurring violation hotspots, agent thrash alerts, self-correction rates, before/after `spec_sha256` evolution, and dead/stale rules (`birkin steer`, `birkin gc`).
-
-## Quick Start (Any Repository)
-
-```bash
-# 1. Auto-detect stack (Python/Go/Rust/Lean/TS) and scaffold .birkin/config.yaml
-birkin init /path/to/repo --write
-
-# 2. Emit compact feedforward brief for an agent entering the repo
-birkin guide /path/to/repo
-
-# 3. Run 6-axis repository readiness audit
-birkin audit /path/to/repo
-
-# 4. Run computational sensors + canonical verify commands and record a hash-chained receipt
-birkin check /path/to/repo --run-verify
-
-# 5. Prove the exact current HEAD/tree has passing receipts
-birkin receipt verify /path/to/repo --require check,verify
-
-# 6. Calibrate custom regex & semantic rules against their own pass/fail fixtures
-birkin eval-rules /path/to/repo
-
-# 7. Run optional narrow semantic review on staged diff or explicit files
-birkin review /path/to/repo --staged
-
-# 8. Inspect telemetry steering signals and entropy garbage-collection backlog
-birkin steer /path/to/repo
-birkin gc /path/to/repo
+```sh
+git clone https://github.com/hauntedfail/birkin.git
+cd birkin
+cargo install --locked --path .
+birkin check --no-receipt
 ```
 
-## Real-Time Operational Wiring (Hooks & Plugins)
+Cargo installs the executable in its `bin` directory (normally `~/.cargo/bin` on Unix). A clean checkout should report `status=PASS` and `findings=0`.
 
-```bash
-# Install git pre-commit hook in a repo
-birkin install-hooks /path/to/repo --target git
+For example, Birkin's own policy keeps HTTP clients out of its static checks. Adding `use ureq;` to `src/constants.rs` produces this diagnostic, even though `ureq` is a valid dependency elsewhere in the crate. The command exits with code `1`.
 
-# Install Claude Code PostToolUse hook (repo-local .claude/settings.local.json, or --global)
-birkin install-hooks /path/to/repo --target claude
-
-# Install native Hermes Agent plugin (~/.hermes/plugins/birkin/, transform_tool_result)
-birkin install-hooks --target hermes
+```text
+[ERROR] ARCH_FORBIDDEN_IMPORT:no-network-in-static-or-models (src/constants.rs:59): Pure static, schema, and parser modules must stay offline and never import HTTP clients. (found import `ureq`)
+  remediation: Keep network I/O isolated to src/live.rs or src/semantic.rs.
 ```
 
-On repositories without `.birkin/config.yaml`, hooks exit cleanly in milliseconds with zero interference.
+## Use it in your repository
 
-## Hermes Runtime Verifier
+From the root of your own Git repository, preview the detected settings, then write the configuration and inspect the guide.
 
-All Hermes Agent configuration, live `/v1/models` contract, and gateway runtime drift checks are available both at top level and under `birkin hermes`:
-
-```bash
-birkin static
-birkin live --probe
-birkin drift
-birkin all --live --json
-birkin all --skip-drift --no-write-state
+```sh
+birkin init
+birkin init --write
+birkin guide
 ```
 
-See [birkin-policy.example.yaml](birkin-policy.example.yaml) for the strict Hermes runtime policy schema.
+Birkin detects Python, Go, Rust, Lean, and JavaScript or TypeScript project files. In `.birkin/config.yaml`, review the detected test commands, point `orientation.entry_docs` at your agent instructions, and add the dependency boundaries your project needs. Commit the configuration with your project. Birkin's own [configuration](.birkin/config.yaml) shows a working layer map and the HTTP import rule above.
 
-## Exit Codes
+```sh
+birkin check --run-verify
+birkin receipt verify --require check,verify
+```
 
-| Code | Meaning |
+`check --run-verify` runs the configured shell commands as well as the built-in checks. `receipt verify` checks the hash chain in the local ledger and looks for passing receipts matching the current revision, working tree, and configuration. Run both in the same CI job to use their exit codes as a merge condition.
+
+## Agent integrations
+
+| Integration | Command | When it runs |
+| --- | --- | --- |
+| Git | `birkin install-hooks --target git` | Before a commit |
+| Claude Code | `birkin install-hooks --target claude` | After a tool call, via project-local settings |
+| Hermes Agent | `birkin install-hooks --target hermes` | As a plugin installed in the user's Hermes environment |
+
+## Other commands
+
+| Command | Use |
 | --- | --- |
-| `0` | `PASS` |
-| `1` | `STATIC / POLICY / SPEC VIOLATION` |
-| `2` | `LIVE CONTRACT VIOLATION` (4xx, missing model, context mismatch, invalid semantic response) |
-| `3` | `LIVE TRANSIENT UNAVAILABLE` (429/5xx/network/protocol/timeout) |
-| `4` | `RUNTIME DRIFT` (gateway older than config/`.env`, missing start time, or SHA mismatch) |
-| `5` | `TOOL / IO / SCHEMA ERROR` (missing explicit spec/policy, invalid YAML, unknown keys) |
+| `birkin audit` | Inspect repository readiness across six areas, including architecture and observability. |
+| `birkin eval-rules` | Check custom rules against their passing and failing examples. |
+| `birkin review --staged` | Run configured semantic review rules on a staged diff using an OpenAI-compatible endpoint. |
+| `birkin steer` / `birkin gc` | Inspect recurring findings in the ledger and find rules to revisit. |
+| `birkin static` / `birkin live --probe` / `birkin drift` | Check Hermes configuration, live provider contracts, or gateway drift. See the [example policy](birkin-policy.example.yaml). |
 
-## Development
+## Verification model
 
-```bash
-cd lean && lake build && cd ..
+The Rust CLI performs repository checks. The [Lean 4 specification](lean/BirkinSpec.lean) models selected properties of exit-code ordering, layer dependencies, receipts, and policy decisions. [Differential tests](tests/lean_oracle_diff.rs) compare Rust behavior with the executable Lean reference on test inputs. The proofs apply to those models. Each project's configured commands determine what a passing verification covers.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Passed |
+| `1` | Static, policy, or repository rule violation |
+| `2` | Live contract violation |
+| `3` | Live service unavailable or transient request failure |
+| `4` | Runtime drift |
+| `5` | Tool, I/O, or schema error |
+
+## Development and feedback
+
+For contributor checks, install Clippy and the Lean toolchain pinned in [lean/lean-toolchain](lean/lean-toolchain). From the repository root, run the same checks as [CI](.github/workflows/ci.yml).
+
+```sh
+(cd lean && lake build)
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run --quiet -- eval-rules
 cargo run --quiet -- check --no-receipt
-cargo build --release
 ```
+
+For a false positive or an unexpected pass, [open an issue](https://github.com/hauntedfail/birkin/issues) with the Birkin version, the smallest rule and input that reproduce it, and the expected and actual output. The [repository map](AGENTS.md) lists implementation modules and contributor conventions.
