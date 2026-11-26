@@ -210,6 +210,7 @@ fn hook_installers_are_idempotent_and_cli_binary_works() {
     let root = tmp.path();
 
     // Idempotent git, claude, and hermes hook installation
+    git(root, &["config", "core.hooksPath", ".git/hooks"]);
     let g1 = install_git_pre_commit_hook(root).unwrap();
     let g2 = install_git_pre_commit_hook(root).unwrap();
     assert_eq!(g1["status"], "created");

@@ -152,7 +152,16 @@ pub fn detect_project_spec(repo_root: &Path) -> ProjectSpec {
             entry_docs,
             ..OrientationSpec::default()
         },
-        architecture: ArchitectureSpec::default(),
+        architecture: ArchitectureSpec {
+            file_line_exemptions: [
+                "**/tests/**", "**/__tests__/**", "**/fixture/**", "**/fixtures/**",
+                "**/generated/**", "**/*_test.go", "**/test_*.py", "**/*_test.py",
+                "**/*.test.js", "**/*.spec.js", "**/*.test.jsx", "**/*.spec.jsx",
+                "**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx",
+                "**/tests.rs", "**/*_test.rs", "**/*_tests.rs",
+            ].into_iter().map(String::from).collect(),
+            ..ArchitectureSpec::default()
+        },
         verify: VerifySpec {
             commands,
             check_ci_parity: true,

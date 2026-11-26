@@ -9,7 +9,8 @@ use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::env;
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{self, Read, Write};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -74,66 +75,75 @@ pub struct GitRevisionState {
 }
 
 pub fn git_revision_state(repo_root: &Path, ignore_rel: Option<&str>) -> GitRevisionState {
-    let head_out = Command::new("git")
-        .args(["-C", &repo_root.to_string_lossy(), "rev-parse", "HEAD"])
-        .output();
-    let Ok(head_proc) = head_out else {
-        return GitRevisionState {
-            is_git: false,
-            git_head: None,
-            git_dirty: false,
-            tree_digest: None,
-        };
-    };
-    let head = if head_proc.status.success() {
-        let s = String::from_utf8_lossy(&head_proc.stdout).trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
-    } else {
-        None
-    };
+    snapshot(repo_root, ignore_rel).unwrap_or(GitRevisionState {
+        is_git: false, git_head: None, git_dirty: true, tree_digest: None,
+    })
+}
 
-    let status_proc = Command::new("git")
-        .args([
-            "-C",
-            &repo_root.to_string_lossy(),
-            "status",
-            "--porcelain=v1",
-            "-uall",
-        ])
-        .output();
-    let status_lines: Vec<String> = match status_proc {
-        Ok(p) if p.status.success() => String::from_utf8_lossy(&p.stdout)
-            .lines()
-            .filter(|line| {
-                if let Some(ign) = ignore_rel {
-                    line.get(3..).map(|r| r.trim() != ign).unwrap_or(true)
-                } else {
-                    true
-                }
-            })
-            .map(ToString::to_string)
-            .collect(),
-        _ => Vec::new(),
-    };
-    let status_text = status_lines.join("\n");
-
-    let diff_text = match Command::new("git")
-        .args(["-C", &repo_root.to_string_lossy(), "diff", "HEAD"])
-        .output()
-    {
-        Ok(p) if p.status.success() => String::from_utf8_lossy(&p.stdout).into_owned(),
-        _ => String::new(),
-    };
-
-    let dirty = !status_text.trim().is_empty();
-    let digest_input = format!("{}\n---\n{}\n---\n{}", head.as_deref().unwrap_or(""), status_text, diff_text);
-    let tree_digest = sha256_hex(digest_input.as_bytes());
-    GitRevisionState {
-        is_git: head.is_some(),
-        git_head: head,
-        git_dirty: dirty,
-        tree_digest: Some(tree_digest),
+fn git_bytes(root: &Path, args: &[&str], ignore: Option<&str>) -> io::Result<Vec<u8>> {
+    let mut cmd = Command::new("git");
+    cmd.current_dir(root).args(args);
+    if let Some(rel) = ignore {
+        cmd.args(["--", ".", &format!(":(top,exclude,literal){rel}")]);
     }
+    let out = cmd.output()?;
+    if !out.status.success() {
+        return Err(io::Error::other(String::from_utf8_lossy(&out.stderr).into_owned()));
+    }
+    Ok(out.stdout)
+}
+
+#[cfg(unix)]
+fn git_path(bytes: &[u8]) -> io::Result<&Path> {
+    use std::os::unix::ffi::OsStrExt;
+    Ok(Path::new(std::ffi::OsStr::from_bytes(bytes)))
+}
+
+#[cfg(not(unix))]
+fn git_path(bytes: &[u8]) -> io::Result<&Path> {
+    std::str::from_utf8(bytes).map(Path::new).map_err(io::Error::other)
+}
+
+fn snapshot(root: &Path, ignore: Option<&str>) -> io::Result<GitRevisionState> {
+    let status = git_bytes(root, &["status", "--porcelain=v1", "-z", "--no-renames", "-uall"], ignore)?;
+    let head = Command::new("git").current_dir(root).args(["rev-parse", "--verify", "--quiet", "HEAD"]).output()?;
+    let revision = match head.status.code() {
+        Some(0) => Some(String::from_utf8(head.stdout).map_err(io::Error::other)?.trim().to_owned()),
+        Some(1) => None,
+        _ => return Err(io::Error::other("cannot resolve HEAD")),
+    };
+    let mut hash = Sha256::new();
+    hash.update(revision.as_deref().unwrap_or_default());
+    hash.update(b"\n---\n");
+    hash.update(&status);
+    hash.update(b"\n---\n");
+    if !status.is_empty() {
+        for args in [vec!["diff", "--cached", "--binary", "--no-ext-diff", "--no-textconv"],
+                     vec!["diff", "--binary", "--no-ext-diff", "--no-textconv"]] {
+            let diff = git_bytes(root, &args, ignore)?;
+            hash.update((diff.len() as u64).to_be_bytes());
+            hash.update(diff);
+        }
+        for path in status.split(|&b| b == 0).filter_map(|row| row.strip_prefix(b"?? ")) {
+            let file = root.join(git_path(path)?);
+            let kind = fs::symlink_metadata(&file)?.file_type();
+            hash.update((path.len() as u64).to_be_bytes());
+            hash.update(path);
+            if kind.is_symlink() {
+                hash.update(b"L");
+                hash.update(Sha256::digest(fs::read_link(file)?.as_os_str().as_encoded_bytes()));
+            } else if kind.is_file() {
+                hash.update(b"F");
+                let mut contents = Sha256::new();
+                io::copy(&mut fs::File::open(file)?, &mut contents)?;
+                hash.update(contents.finalize());
+            } else {
+                return Err(io::Error::other(format!("unsupported untracked path {}", file.display())));
+            }
+        }
+    }
+    Ok(GitRevisionState { is_git: true, git_head: revision, git_dirty: !status.is_empty(),
+        tree_digest: Some(format!("{:x}", hash.finalize())) })
 }
 
 fn relative_ignore(repo_root: &Path, ledger_path: &Path) -> Option<String> {
@@ -161,12 +171,21 @@ pub fn receipt_hash(entry: &Map<String, Value>) -> String {
 }
 
 pub fn read_receipts(ledger_path: &Path) -> Vec<Map<String, Value>> {
-    if !ledger_path.is_file() {
-        return Vec::new();
-    }
-    let Ok(text) = fs::read_to_string(ledger_path) else {
-        return Vec::new();
+    let read = || -> io::Result<_> {
+        let mut file = fs::File::open(ledger_path)?;
+        file.lock_shared()?;
+        let mut text = String::new();
+        file.read_to_string(&mut text)?;
+        Ok(parse_receipts(&text))
     };
+    match read() {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(_) => vec![Map::from_iter([("_corrupt".into(), Value::Bool(true))])],
+    }
+}
+
+fn parse_receipts(text: &str) -> Vec<Map<String, Value>> {
     let mut entries = Vec::new();
     for raw in text.lines() {
         let line = raw.trim();
@@ -240,17 +259,18 @@ pub fn append_receipt(
             .map_err(|e| format!("Failed creating ledger dir {}: {e}", parent.display()))?;
     }
 
-    let existing = read_receipts(&ledger_path);
-    let prev_hash = existing
-        .last()
-        .filter(|e| !e.get("_corrupt").and_then(Value::as_bool).unwrap_or(false))
-        .and_then(|e| e.get("receipt_sha256"))
-        .and_then(Value::as_str)
-        .unwrap_or("GENESIS")
-        .to_string();
-
+    let mut fh = OpenOptions::new().create(true).read(true).append(true).open(&ledger_path)
+        .map_err(|e| format!("Failed opening ledger {}: {e}", ledger_path.display()))?;
+    fh.lock().map_err(|e| format!("Failed locking ledger: {e}"))?;
+    let mut text = String::new();
+    fh.read_to_string(&mut text).map_err(|e| format!("Failed reading ledger: {e}"))?;
+    let existing = parse_receipts(&text);
+    let prev_hash = match existing.last() {
+        Some(entry) => entry.get("receipt_sha256").and_then(Value::as_str).ok_or("Invalid receipt at end of ledger")?,
+        None => "GENESIS",
+    };
     let ignore_rel = relative_ignore(repo_root, &ledger_path);
-    let rev = git_revision_state(repo_root, ignore_rel.as_deref());
+    let rev = snapshot(repo_root, ignore_rel.as_deref()).map_err(|e| format!("Cannot snapshot working tree: {e}"))?;
 
     let mut rule_counts: BTreeMap<String, usize> = BTreeMap::new();
     let mut affected_files: Vec<String> = Vec::new();
@@ -306,11 +326,9 @@ pub fn append_receipt(
     let serialized = serde_json::to_string(&canon_entry)
         .map_err(|e| format!("Failed serializing receipt: {e}"))?;
 
-    let mut fh = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&ledger_path)
-        .map_err(|e| format!("Failed opening ledger {}: {e}", ledger_path.display()))?;
+    if !text.is_empty() && !text.ends_with('\n') {
+        fh.write_all(b"\n").map_err(|e| format!("Failed terminating receipt: {e}"))?;
+    }
     writeln!(fh, "{serialized}")
         .map_err(|e| format!("Failed writing ledger {}: {e}", ledger_path.display()))?;
 
@@ -330,10 +348,10 @@ pub fn verify_receipts_for_current_state(
     let rev = git_revision_state(repo_root, ignore_rel.as_deref());
     let spec_sha = canonical_spec_sha256(spec);
 
-    if require_clean && rev.git_dirty {
+    if rev.tree_digest.is_none() || (require_clean && rev.git_dirty) {
         return json!({
             "status": "FAIL",
-            "reason": "Working tree is dirty while --require-clean is set",
+            "reason": if rev.tree_digest.is_none() { "Cannot snapshot working tree" } else { "Working tree is dirty while --require-clean is set" },
             "chain_ok": chain_ok,
             "chain_errors": chain_errors,
             "ledger_path": ledger_path.to_string_lossy(),

@@ -230,56 +230,48 @@ pub fn run_pre_commit_hook(repo_root: &Path) -> Result<(i32, Vec<ProjectFinding>
 }
 
 pub fn install_git_pre_commit_hook(repo_root: &Path) -> Result<Value, String> {
-    let git_dir = repo_root.join(".git");
-    if !git_dir.is_dir() {
-        return Err(format!(
-            "Not a git repository (missing .git directory): {}",
-            repo_root.display()
-        ));
-    }
-    let hooks_dir = git_dir.join("hooks");
-    fs::create_dir_all(&hooks_dir)
-        .map_err(|e| format!("Failed creating {}: {e}", hooks_dir.display()))?;
-    let hook_path = hooks_dir.join("pre-commit");
-
-    let snippet = format!(
-        "{GIT_HOOK_MARKER}\nif command -v birkin >/dev/null 2>&1; then\n  birkin hook pre-commit \"$(git rev-parse --show-toplevel)\" || exit $?\nfi\n"
-    );
-
-    let action = if hook_path.is_file() {
-        let existing = fs::read_to_string(&hook_path).unwrap_or_default();
-        if existing.contains(GIT_HOOK_MARKER) {
-            return Ok(json!({
-                "target": "git",
-                "path": hook_path.to_string_lossy(),
-                "status": "already_installed",
-            }));
+    let resolve = |args: &[&str]| -> Result<PathBuf, String> {
+        let out = Command::new("git").current_dir(repo_root)
+            .args(["rev-parse", "--path-format=absolute"]).args(args).output()
+            .map_err(|e| format!("Failed resolving Git hook directory: {e}"))?;
+        if !out.status.success() {
+            return Err(String::from_utf8_lossy(&out.stderr).trim().to_owned());
         }
-        let updated = format!("{}\n\n{snippet}", existing.trim_end());
-        fs::write(&hook_path, updated)
-            .map_err(|e| format!("Failed writing {}: {e}", hook_path.display()))?;
-        "appended"
-    } else {
-        fs::write(&hook_path, format!("#!/bin/sh\nset -eu\n\n{snippet}"))
-            .map_err(|e| format!("Failed writing {}: {e}", hook_path.display()))?;
-        "created"
+        let path = String::from_utf8(out.stdout).map_err(|e| e.to_string())?;
+        Ok(PathBuf::from(path.trim_end_matches(['\r', '\n'])))
     };
-
+    let hooks = resolve(&["--git-path", "hooks"])?;
+    let standard = resolve(&["--git-common-dir"])?.join("hooks");
+    let path = hooks.join("pre-commit");
+    let invocation = r#"birkin hook pre-commit "$(git rev-parse --show-toplevel)" || exit $?"#;
+    let manual = format!("Git uses {}. Integrate `{invocation}` into the active pre-commit hook.", path.display());
+    if hooks != standard || hooks.is_symlink() || path.is_symlink() {
+        return Err(manual);
+    }
+    fs::create_dir_all(&hooks).map_err(|e| format!("{}: {e}", hooks.display()))?;
+    let managed = format!("#!/bin/sh\nset -eu\n{GIT_HOOK_MARKER}\n{invocation}\n");
+    let status = match fs::OpenOptions::new().create_new(true).write(true).open(&path) {
+        Ok(mut file) => {
+            use std::io::Write;
+            file.write_all(managed.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))?;
+            "created"
+        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            let text = fs::read_to_string(&path).map_err(|_| manual.clone())?;
+            let legacy = format!("#!/bin/sh\nset -eu\n\n{GIT_HOOK_MARKER}\nif command -v birkin >/dev/null 2>&1; then\n  {invocation}\nfi\n");
+            if text != managed && text != legacy { return Err(manual); }
+            "already_installed"
+        }
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+    };
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        if let Ok(md) = fs::metadata(&hook_path) {
-            let mut perms = md.permissions();
-            perms.set_mode(perms.mode() | 0o111);
-            let _ = fs::set_permissions(&hook_path, perms);
-        }
+        let mut perms = fs::metadata(&path).map_err(|e| e.to_string())?.permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(&path, perms).map_err(|e| e.to_string())?;
     }
-
-    Ok(json!({
-        "target": "git",
-        "path": hook_path.to_string_lossy(),
-        "status": action,
-    }))
+    Ok(json!({"target": "git", "path": path, "status": status}))
 }
 
 pub fn install_claude_hook(settings_path: &Path) -> Result<Value, String> {
