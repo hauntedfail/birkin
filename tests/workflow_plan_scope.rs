@@ -335,32 +335,6 @@ fn workflow_config_defaults_are_backward_compatible_and_unknown_values_fail_clos
     }
 }
 
-fn encode_scope(auth: PathAuthority, outcome: &ScopeOutcome, writes: &[String]) -> String {
-    let decisions: Vec<String> = outcome
-        .decisions
-        .iter()
-        .map(|d| {
-            format!(
-                "{},{},{},{}",
-                bit(d.inside_root),
-                bit(d.matched_allowed),
-                bit(d.matched_forbidden),
-                bit(d.matched_verify_output)
-            )
-        })
-        .collect();
-    let auth = match auth {
-        PathAuthority::SourceEdit => "source",
-        PathAuthority::VerificationOutput => "verification_output",
-    };
-    format!(
-        "scope_admit {auth} {} {} {}",
-        joined(&decisions, ";"),
-        joined(writes, "|"),
-        joined(&outcome.overlapping_writes, "|")
-    )
-}
-
 fn scope_fixture() -> (TempDir, PlanTaskSpec) {
     let tmp = TempDir::new().unwrap();
     let root = tmp.path().join("checkout");
@@ -505,10 +479,11 @@ fn diff_scope_decisions_match_lean() {
     let mut rust = Vec::new();
 
     // Exhaustive decision table for a single path, with and without a conflicting writer.
-    for (auth, auth_name) in [
+    let authorities = [
         (PathAuthority::SourceEdit, "source"),
         (PathAuthority::VerificationOutput, "verification_output"),
-    ] {
+    ];
+    for (auth, auth_name) in authorities {
         for mask in 0..16u8 {
             let flags = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0, mask & 8 != 0];
             let admitted = path_admitted_bool(auth, flags[0], flags[1], flags[2], flags[3]);
@@ -519,40 +494,71 @@ fn diff_scope_decisions_match_lean() {
             }
         }
     }
-    queries.push("scope_admit source - - -".into());
-    rust.push(true);
 
-    // Decisions extracted from a real tree: the Rust verdict must equal the Lean verdict
-    // computed from the same extracted facts.
+    // The fixture, independently of either engine, specifies path facts and both writers' paths.
     let (tmp, unit) = scope_fixture();
     let root = tmp.path().join("checkout");
-    let other = ActiveUnitRecord {
-        task_id: "t2".into(),
-        checkout_root: root.to_string_lossy().into_owned(),
-        write_paths: vec!["src/routes/".into()],
-    };
-    let path_sets: [&[&str]; 7] = [
-        &["src/ok.rs"],
-        &["src/ok.rs", "src/new.rs"],
-        &["src/ok.rs", "src/private/key.rs"],
-        &["target/out.bin"],
-        &["README.md", "../outside/x.rs"],
-        &["src/routes/api/items/[id].ts"],
-        &[],
+    let allowed = [true, true, false, false];
+    let file = ("src/ok.rs", allowed);
+    let dir = ("src/routes/", allowed);
+    let child = ("src/routes/api/items/[id].ts", allowed);
+    let forbidden = ("src/private/key.rs", [true, true, true, false]);
+    let output = ("target/out.bin", [true, false, false, true]);
+    type PathFact<'a> = (&'a str, [bool; 4]);
+    let cases: &[(&[PathFact], &[&str], bool)] = &[
+        (&[], &[], false),
+        (&[file, ("src/new.rs", allowed)], &[], false),
+        (&[file], &[file.0], true),
+        (&[file, child], &["docs", "src/routes/"], true),
+        (&[dir], &[child.0], true),
+        (&[dir], &["src/routes-old/page.ts"], false),
+        (&[file], &["src/ok.rs.bak"], false),
+        (&[file, forbidden], &[], false),
+        (&[output], &[], false),
+        (&[("README.md", [true, false, false, false])], &[], false),
+        (&[("../outside/x.rs", [false; 4])], &[], false),
+        #[cfg(unix)]
+        (&[("src/link/new.rs", [false; 4])], &[], false),
     ];
-    for paths in path_sets {
-        let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
-        for auth in [PathAuthority::SourceEdit, PathAuthority::VerificationOutput] {
-            for others in [vec![], vec![other.clone()]] {
-                let outcome = verify_task_scope(&root, &unit, &paths, auth, &others);
-                let writes: Vec<String> = paths
-                    .iter()
-                    .filter(|p| !p.starts_with(".."))
-                    .cloned()
-                    .collect();
-                queries.push(encode_scope(auth, &outcome, &writes));
-                rust.push(outcome.admitted);
+    for &(paths, other_paths, conflict) in cases {
+        let changed: Vec<_> = paths.iter().map(|(p, _)| p.to_string()).collect();
+        let mine: Vec<_> = paths
+            .iter()
+            .filter(|(_, f)| f[0])
+            .map(|(p, _)| p.to_string())
+            .collect();
+        let facts: Vec<_> = paths.iter().map(|(_, f)| f.map(bit).join(",")).collect();
+        let peer = ActiveUnitRecord {
+            task_id: "t2".into(),
+            checkout_root: root.to_string_lossy().into_owned(),
+            write_paths: other_paths.iter().map(|p| p.to_string()).collect(),
+        };
+        for (auth, auth_name) in authorities {
+            let query = format!(
+                "scope_admit {auth_name} {} {} {}",
+                joined(&facts, ";"),
+                joined(&mine, "|"),
+                joined(&peer.write_paths, "|")
+            );
+            let outcome =
+                verify_task_scope(&root, &unit, &changed, auth, std::slice::from_ref(&peer));
+            assert_eq!(outcome.decisions.len(), paths.len(), "{query}");
+            for (d, (path, expected)) in outcome.decisions.iter().zip(paths) {
+                assert_eq!(d.path, *path);
+                assert_eq!(
+                    [
+                        d.inside_root,
+                        d.matched_allowed,
+                        d.matched_forbidden,
+                        d.matched_verify_output
+                    ],
+                    *expected,
+                    "{path}"
+                );
             }
+            assert_eq!(!outcome.overlapping_writes.is_empty(), conflict, "{query}");
+            queries.push(query);
+            rust.push(outcome.admitted);
         }
     }
 

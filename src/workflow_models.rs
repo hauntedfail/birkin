@@ -251,24 +251,17 @@ pub struct PlanTaskSpec {
     pub context: String,
     pub expected_behavior: String,
     pub status: String,
-    #[serde(default)]
     pub depends_on: Vec<String>,
-    #[serde(default)]
     pub allowed_paths: Vec<String>,
-    #[serde(default)]
     pub forbidden_paths: Vec<String>,
     #[serde(default)]
     pub verification_output_paths: Vec<String>,
     #[serde(default)]
     pub checkout_root: Option<String>,
-    #[serde(default)]
     pub acceptance: Vec<String>,
-    #[serde(default)]
     pub verification: Vec<PlanVerificationSpec>,
-    #[serde(default)]
     pub stop_conditions: Vec<String>,
     pub owner: String,
-    #[serde(default)]
     pub completion_evidence: Vec<String>,
 }
 
@@ -276,7 +269,6 @@ pub struct PlanTaskSpec {
 pub struct PlanQuestionSpec {
     pub id: String,
     pub question: String,
-    #[serde(default)]
     pub blocks: Vec<String>,
 }
 
@@ -285,15 +277,10 @@ pub struct PlanDocument {
     pub version: u32,
     pub intent: String,
     pub outcome: String,
-    #[serde(default)]
     pub non_goals: Vec<String>,
-    #[serde(default)]
     pub constraints: Vec<String>,
-    #[serde(default)]
     pub evidence: Vec<String>,
-    #[serde(default)]
     pub questions: Vec<PlanQuestionSpec>,
-    #[serde(default)]
     pub tasks: Vec<PlanTaskSpec>,
 }
 

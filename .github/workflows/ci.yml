@@ -48,7 +48,7 @@ jobs:
       - name: Test (Rust unit and integration suites)
         run: cargo test --lib --test project_engine --test parsers_and_verify --test hermes_runtime --test semantic_and_hooks --test git_workflows
       - name: Test (workflow contracts without the Lean oracle)
-        run: cargo test --test workflow_plan_scope -- --skip diff_
+        run: cargo test --test workflow_plan_scope --test workflow_scope_paths --test workflow_plan_schema -- --skip diff_
       - name: Test (authority, stage, and review contracts without the Lean oracle or Unix fixtures)
         run: cargo test --test workflow_authority_stage_review -- --skip diff_ --skip sawyer_
       - name: Calibrate Birkin rules

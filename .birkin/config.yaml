@@ -288,6 +288,7 @@ proofs:
         - BirkinSpec.pathAdmitted_forbidden_dominates
         - BirkinSpec.pathAdmitted_verifyOutput_no_source_edit
         - BirkinSpec.scopeAdmitted_implies_all_in_scope
+        - BirkinSpec.disjointWriteSets_conflict_false
         - BirkinSpec.dispatchAdmitted_F_requires_explicit
         - BirkinSpec.dispatchAdmitted_readonly_role_requires_R
         - BirkinSpec.dispatchAdmitted_review_requires_independence

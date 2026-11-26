@@ -33,8 +33,16 @@ def pathAdmitted (auth : PathAuthority) (d : PathDecision) : Bool :=
 def allPathsAdmitted (auth : PathAuthority) (ds : List PathDecision) : Bool :=
   ds.all (pathAdmitted auth)
 
+/-- The oracle receives resolved checkout-relative paths. A final slash may mark a directory. -/
+def writeComponents (p : String) : List String :=
+  (p.dropEndWhile '/').toString.splitOn "/"
+
+def writePathsOverlap (p q : String) : Bool :=
+  (writeComponents p).isPrefixOf (writeComponents q) ||
+    (writeComponents q).isPrefixOf (writeComponents p)
+
 def disjointWriteSets (writesA writesB : List String) : Bool :=
-  writesA.all (fun p => !writesB.contains p)
+  writesA.all fun p => writesB.all fun q => !writePathsOverlap p q
 
 def scopeAdmitted (auth : PathAuthority) (ds : List PathDecision)
     (myWrites otherActiveWrites : List String) : Bool :=
@@ -58,26 +66,27 @@ theorem pathAdmitted_verifyOutput_no_source_edit (d : PathDecision)
   · rfl
   · exact hnoallow
 
+theorem disjointWriteSets_conflict_false {writesA writesB : List String} {p q : String}
+    (ha : p ∈ writesA) (hb : q ∈ writesB) (hconflict : writePathsOverlap p q = true) :
+    disjointWriteSets writesA writesB = false := by
+  apply Bool.eq_false_iff.mpr
+  intro h
+  have hpair := List.all_eq_true.mp (List.all_eq_true.mp h p ha) q hb
+  simp [hconflict] at hpair
+
 theorem disjointWriteSets_overlap_false {writesA writesB : List String} {p : String}
     (ha : p ∈ writesA) (hb : p ∈ writesB) :
     disjointWriteSets writesA writesB = false := by
-  unfold disjointWriteSets
-  cases h : writesA.all (fun x => !writesB.contains x) with
-  | false => rfl
-  | true =>
-    have hp := List.all_eq_true.mp h p ha
-    simp at hp
-    exact False.elim (hp hb)
+  apply disjointWriteSets_conflict_false ha hb
+  simp [writePathsOverlap, List.isPrefixOf_iff_prefix]
 
 theorem scopeAdmitted_implies_all_in_scope {auth : PathAuthority} {ds : List PathDecision}
     {myWrites otherWrites : List String}
     (h : scopeAdmitted auth ds myWrites otherWrites = true) :
-    (∀ d ∈ ds, pathAdmitted auth d = true) ∧ (∀ p ∈ myWrites, p ∉ otherWrites) := by
-  unfold scopeAdmitted allPathsAdmitted disjointWriteSets at h
-  have ⟨hpaths, hdisj⟩ := Bool.and_eq_true _ _ |>.mp h
-  refine ⟨fun d hd => List.all_eq_true.mp hpaths d hd, fun p hp hmem => ?_⟩
-  have hnot := List.all_eq_true.mp hdisj p hp
-  simp at hnot
-  exact hnot hmem
+    (∀ d ∈ ds, pathAdmitted auth d = true) ∧
+    (∀ p ∈ myWrites, ∀ q ∈ otherWrites, writePathsOverlap p q = false) := by
+  obtain ⟨hpaths, hdisj⟩ := Bool.and_eq_true_iff.mp h
+  refine ⟨List.all_eq_true.mp hpaths, fun p hp q hq => ?_⟩
+  exact (Bool.not_eq_true' _).mp (List.all_eq_true.mp (List.all_eq_true.mp hdisj p hp) q hq)
 
 end BirkinSpec

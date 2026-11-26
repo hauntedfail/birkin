@@ -6,6 +6,7 @@ use crate::workflow_models::{ActiveUnitRecord, PlanTaskSpec};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 
@@ -51,16 +52,12 @@ pub fn path_admitted_bool(
     }
 }
 
-fn normalize_posix(raw: &str) -> String {
-    raw.replace('\\', "/").trim_start_matches("./").to_string()
-}
-
-/// Match a normalized repo-relative path against a scoped `fly-face` entry (exact file or `dir/`).
+/// Match a repo-relative POSIX spelling against an exact file or directory rule.
 pub fn scoped_entry_matches(rel_posix: &str, scoped: &str) -> bool {
-    let rel = normalize_posix(rel_posix);
-    let rule = normalize_posix(scoped);
-    if let Some(dir_prefix) = rule.strip_suffix('/') {
-        rel == dir_prefix || rel.starts_with(&format!("{dir_prefix}/"))
+    let rel = rel_posix.trim_start_matches("./");
+    let rule = scoped.trim_start_matches("./");
+    if let Some(dir) = rule.strip_suffix('/') {
+        rel == dir || rel.starts_with(rule)
     } else {
         rel == rule
     }
@@ -72,95 +69,100 @@ pub fn write_paths_overlap(a: &str, b: &str) -> bool {
     a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
-fn normalize_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for comp in path.components() {
-        match comp {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
+struct ScopePath {
+    lexical: String,
+    canonical: String,
 }
 
-/// Resolve an existing or not-yet-created path under `root`, following symlinks on its nearest
-/// existing ancestor so symlink escapes outside `root` are caught fail-closed.
+fn relative_spelling(path: &Path) -> Option<String> {
+    let mut names = Vec::new();
+    for component in path.components() {
+        match component {
+            Component::Normal(name) => names.push(name.to_str()?),
+            Component::CurDir => (),
+            _ => return None,
+        }
+    }
+    Some(names.join("/"))
+}
+
+fn checkout_directory(root: &Path) -> Option<PathBuf> {
+    let canonical = fs::canonicalize(root).ok()?;
+    canonical.to_str()?;
+    fs::metadata(&canonical).ok()?.is_dir().then_some(canonical)
+}
+
+fn resolve_scope_path(root: &Path, canonical_root: &Path, raw: &str) -> Option<ScopePath> {
+    let path = Path::new(raw);
+    let relative = if path.is_absolute() {
+        path.strip_prefix(canonical_root)
+            .ok()
+            .or_else(|| path.strip_prefix(std::path::absolute(root).ok()?).ok())?
+    } else {
+        path
+    };
+    let lexical = relative_spelling(relative)?;
+    let mut resolved = canonical_root.to_path_buf();
+    let mut components = relative.components().peekable();
+    while let Some(component) = components.next() {
+        let Component::Normal(name) = component else {
+            continue;
+        };
+        // A drive-like segment in the middle of a Windows path must never reset the base.
+        if !matches!(
+            Path::new(name).components().next(),
+            Some(Component::Normal(_))
+        ) {
+            return None;
+        }
+        resolved.push(name);
+        match fs::symlink_metadata(&resolved) {
+            Ok(_) => {
+                // An existing link must resolve even when its target has disappeared.
+                resolved = fs::canonicalize(&resolved).ok()?;
+                resolved.strip_prefix(canonical_root).ok()?;
+                resolved.to_str()?;
+                let requires_dir = components.peek().is_some()
+                    || raw.ends_with(std::path::is_separator)
+                    || raw
+                        .strip_suffix('.')
+                        .is_some_and(|p| p.ends_with(std::path::is_separator));
+                if requires_dir && !fs::metadata(&resolved).ok()?.is_dir() {
+                    return None;
+                }
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => (),
+            Err(_) => return None,
+        }
+    }
+    let canonical = relative_spelling(resolved.strip_prefix(canonical_root).ok()?)?;
+    Some(ScopePath { lexical, canonical })
+}
+
+/// Return the canonical checkout-relative spelling, including a verified new-file suffix.
 pub fn resolve_under_root(root: &Path, rel_or_abs: &str) -> (bool, String) {
-    let Ok(canon_root) = fs::canonicalize(root) else {
-        return (false, normalize_posix(rel_or_abs));
-    };
-    // Join segment by segment: a canonical Windows root is a verbatim path, where `/` is not a
-    // separator. A relative `..` is rejected outright because lexical and symlink-aware
-    // resolution can disagree about where it lands.
-    let candidate = if Path::new(rel_or_abs).is_absolute() {
-        PathBuf::from(rel_or_abs)
-    } else {
-        let mut joined = canon_root.clone();
-        for seg in rel_or_abs.split(['/', '\\']) {
-            match seg {
-                "" | "." => {}
-                ".." => return (false, normalize_posix(rel_or_abs)),
-                s => joined.push(s),
-            }
-        }
-        joined
-    };
+    let path = checkout_directory(root).and_then(|dir| resolve_scope_path(root, &dir, rel_or_abs));
+    match path {
+        Some(path) => (true, path.canonical),
+        None => (false, rel_or_abs.to_owned()),
+    }
+}
 
-    let resolved = if candidate.exists() || candidate.symlink_metadata().is_ok() {
-        match fs::canonicalize(&candidate) {
-            Ok(c) => c,
-            Err(_) => {
-                // Broken symlink: check link target directly; treat unresolved target as outside root.
-                if let Ok(target) = fs::read_link(&candidate) {
-                    let full = if target.is_absolute() {
-                        target
-                    } else {
-                        candidate.parent().unwrap_or(&canon_root).join(target)
-                    };
-                    normalize_lexical(&full)
-                } else {
-                    return (false, normalize_posix(rel_or_abs));
-                }
-            }
-        }
-    } else {
-        // Walk up until an existing ancestor is found, canonicalize it, then append remaining tail.
-        let mut cur = candidate.as_path();
-        let mut tail = Vec::new();
-        loop {
-            if cur.exists() {
-                let Ok(base) = fs::canonicalize(cur) else {
-                    return (false, normalize_posix(rel_or_abs));
-                };
-                let mut rebuilt = base;
-                for seg in tail.into_iter().rev() {
-                    rebuilt.push(seg);
-                }
-                break normalize_lexical(&rebuilt);
-            }
-            match (cur.parent(), cur.file_name()) {
-                (Some(parent), Some(name)) => {
-                    tail.push(name.to_os_string());
-                    cur = parent;
-                }
-                _ => break normalize_lexical(&candidate),
-            }
-        }
-    };
-
-    match resolved.strip_prefix(&canon_root) {
-        Ok(rel) => {
-            let posix = rel
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().into_owned())
-                .collect::<Vec<_>>()
-                .join("/");
-            (true, posix)
-        }
-        Err(_) => (false, normalize_posix(rel_or_abs)),
+impl ScopePath {
+    fn matches(&self, task: &PlanTaskSpec) -> (bool, bool, bool) {
+        let matches = |name: &str, rules: &[String]| {
+            rules.iter().any(|rule| scoped_entry_matches(name, rule))
+        };
+        let names = [self.lexical.as_str(), self.canonical.as_str()];
+        let allowed = names.map(|name| matches(name, &task.allowed_paths));
+        let output = names.map(|name| matches(name, &task.verification_output_paths));
+        let forbidden = names
+            .iter()
+            .any(|name| matches(name, &task.forbidden_paths));
+        // Each name may use either grant for verification, including a mixed source/output pair.
+        let verified_output =
+            (output[0] || output[1]) && (allowed[0] || output[0]) && (allowed[1] || output[1]);
+        (allowed[0] && allowed[1], forbidden, verified_output)
     }
 }
 
@@ -174,25 +176,16 @@ pub fn verify_task_scope(
 ) -> ScopeOutcome {
     let mut decisions = Vec::new();
     let mut findings = Vec::new();
-    let mut normalized_writes = Vec::new();
+    let mut normalized_writes = BTreeSet::new();
+    let canonical_root = checkout_directory(checkout_root);
 
     for raw in changed_paths {
-        let (inside_root, rel_posix) = resolve_under_root(checkout_root, raw);
-        let matched_allowed = inside_root
-            && task
-                .allowed_paths
-                .iter()
-                .any(|p| scoped_entry_matches(&rel_posix, p));
-        let matched_forbidden = inside_root
-            && task
-                .forbidden_paths
-                .iter()
-                .any(|p| scoped_entry_matches(&rel_posix, p));
-        let matched_verify_output = inside_root
-            && task
-                .verification_output_paths
-                .iter()
-                .any(|p| scoped_entry_matches(&rel_posix, p));
+        let path = canonical_root
+            .as_deref()
+            .and_then(|root| resolve_scope_path(checkout_root, root, raw));
+        let inside_root = path.is_some();
+        let (matched_allowed, matched_forbidden, matched_verify_output) =
+            path.as_ref().map(|p| p.matches(task)).unwrap_or_default();
         let admitted = path_admitted_bool(
             auth,
             inside_root,
@@ -200,10 +193,8 @@ pub fn verify_task_scope(
             matched_forbidden,
             matched_verify_output,
         );
-        if inside_root {
-            normalized_writes.push(rel_posix.clone());
-        }
         if !admitted {
+            let rel_posix = path.as_ref().map_or(raw.as_str(), |p| &p.canonical);
             let rule = if !inside_root {
                 "SCOPE_ROOT_ESCAPE"
             } else if matched_forbidden {
@@ -224,6 +215,9 @@ pub fn verify_task_scope(
                 details: BTreeMap::new(),
             });
         }
+        if let Some(path) = path {
+            normalized_writes.extend([path.lexical, path.canonical]);
+        }
         decisions.push(PathDecision {
             path: raw.clone(),
             inside_root,
@@ -234,29 +228,23 @@ pub fn verify_task_scope(
         });
     }
 
-    let canon_root_str = fs::canonicalize(checkout_root)
-        .unwrap_or_else(|_| checkout_root.to_path_buf())
-        .to_string_lossy()
-        .into_owned();
-
-    let mut other_writes: BTreeSet<String> = BTreeSet::new();
-    for unit in other_active_units {
-        if unit.task_id == task.id {
+    let mut other_writes = BTreeSet::new();
+    for unit in other_active_units
+        .iter()
+        .filter(|unit| unit.task_id != task.id)
+    {
+        let unit_dir = Path::new(&unit.checkout_root);
+        let Some(unit_root) = checkout_directory(unit_dir) else {
+            findings.push(unresolved_writer(unit, &unit.checkout_root));
+            continue;
+        };
+        if canonical_root.as_ref() != Some(&unit_root) {
             continue;
         }
-        let unit_root = fs::canonicalize(&unit.checkout_root)
-            .unwrap_or_else(|_| PathBuf::from(&unit.checkout_root))
-            .to_string_lossy()
-            .into_owned();
-        if unit_root != canon_root_str {
-            continue;
-        }
-        for wp in &unit.write_paths {
-            let (in_r, norm) = resolve_under_root(checkout_root, wp);
-            if in_r {
-                other_writes.insert(norm);
-            } else {
-                other_writes.insert(normalize_posix(wp));
+        for write in &unit.write_paths {
+            match resolve_scope_path(unit_dir, &unit_root, write) {
+                Some(path) => other_writes.extend([path.lexical, path.canonical]),
+                None => findings.push(unresolved_writer(unit, write)),
             }
         }
     }
@@ -281,13 +269,35 @@ pub fn verify_task_scope(
         }
     }
 
-    let admitted = decisions.iter().all(|d| d.admitted) && overlapping_writes.is_empty();
+    let admitted = findings.is_empty() && canonical_root.is_some();
     ScopeOutcome {
         admitted,
         decisions,
         overlapping_writes,
         findings,
     }
+}
+
+fn unresolved_writer(unit: &ActiveUnitRecord, path: &str) -> ProjectFinding {
+    ProjectFinding {
+        rule: "SCOPE_UNRESOLVED_WRITER".into(),
+        category: "workflow".into(),
+        severity: "error".into(),
+        file: Some(path.into()),
+        line: None,
+        message: format!(
+            "Cannot verify write scope for active task '{}'.",
+            unit.task_id
+        ),
+        remediation: "Provide a resolvable checkout and checkout-relative write set.".into(),
+        details: BTreeMap::new(),
+    }
+}
+
+fn git_path(bytes: &[u8]) -> Result<String, String> {
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|_| "Git reported a path that cannot be represented as UTF-8".into())
 }
 
 /// Collect changed (or staged) repo-relative paths via Git for live scope inspection.
@@ -299,7 +309,7 @@ pub fn collect_git_changed_paths(
     if staged_only {
         let out = Command::new("git")
             .current_dir(repo_root)
-            .args(["diff", "--cached", "--name-only", "-z"])
+            .args(["diff", "--cached", "--name-only", "--no-renames", "-z"])
             .output()
             .map_err(|e| format!("Failed invoking git diff --cached: {e}"))?;
         if !out.status.success() {
@@ -307,7 +317,7 @@ pub fn collect_git_changed_paths(
         }
         for chunk in out.stdout.split(|&b| b == 0) {
             if !chunk.is_empty() {
-                paths.insert(String::from_utf8_lossy(chunk).into_owned());
+                paths.insert(git_path(chunk)?);
             }
         }
     } else {
@@ -321,9 +331,24 @@ pub fn collect_git_changed_paths(
         }
         for rec in out.stdout.split(|&b| b == 0) {
             if rec.len() > 3 {
-                paths.insert(String::from_utf8_lossy(&rec[3..]).into_owned());
+                paths.insert(git_path(&rec[3..])?);
             }
         }
     }
     Ok(paths.into_iter().collect())
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    #[test]
+    fn scope_spelling_requires_lossless_native_components() {
+        let valid = Path::new("src/name-\u{fffd}");
+        let invalid = Path::new(OsStr::from_bytes(b"src/name-\xff"));
+        assert_eq!(relative_spelling(valid).as_deref(), valid.to_str());
+        assert_eq!(relative_spelling(invalid), None);
+    }
 }
