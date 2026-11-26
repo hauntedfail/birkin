@@ -56,6 +56,9 @@ architecture:
       remediation: "Utility, parser, and ledger modules may only depend on core and models."
     - name: engines
       paths:
+        - "src/authority_contract.rs"
+        - "src/stage_contract.rs"
+        - "src/review_closure.rs"
         - "src/static_check.rs"
         - "src/live.rs"
         - "src/drift.rs"
@@ -103,6 +106,9 @@ architecture:
   forbidden_imports:
     - id: no-network-in-static-or-models
       from_globs:
+        - "src/authority_contract.rs"
+        - "src/stage_contract.rs"
+        - "src/review_closure.rs"
         - "src/constants.rs"
         - "src/glob.rs"
         - "src/models.rs"
@@ -172,6 +178,9 @@ invariants:
         - "theorem broken : True := by sorry"
     - id: no-println-in-engines
       globs:
+        - "src/authority_contract.rs"
+        - "src/stage_contract.rs"
+        - "src/review_closure.rs"
         - "src/sensors.rs"
         - "src/guides.rs"
         - "src/prove.rs"
@@ -280,9 +289,11 @@ proofs:
         - BirkinSpec.pathAdmitted_verifyOutput_no_source_edit
         - BirkinSpec.scopeAdmitted_implies_all_in_scope
         - BirkinSpec.dispatchAdmitted_F_requires_explicit
+        - BirkinSpec.dispatchAdmitted_readonly_role_requires_R
         - BirkinSpec.dispatchAdmitted_review_requires_independence
         - BirkinSpec.dispatchAdmitted_refusal_no_escalation
         - BirkinSpec.stageAdmitted_zero_discovered_tests_false
+        - BirkinSpec.stageAdmitted_committed_requires_reviewed
         - BirkinSpec.stageAdmitted_committed_requires_sawyer
         - BirkinSpec.stageAdmitted_released_requires_all
         - BirkinSpec.reviewClosureValid_resolved_without_reply_false

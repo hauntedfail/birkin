@@ -22,6 +22,7 @@ jobs:
           curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
           "$HOME/.elan/bin/elan" toolchain install "$(tr -d '[:space:]' < lean/lean-toolchain)"
+          "$HOME/.elan/bin/elan" default "$(tr -d '[:space:]' < lean/lean-toolchain)"
       - name: Build Lean 4 proofs and reference oracle
         run: cd lean && lake build
       - name: Lint (clippy)
@@ -48,6 +49,8 @@ jobs:
         run: cargo test --lib --test project_engine --test parsers_and_verify --test hermes_runtime --test semantic_and_hooks --test git_workflows
       - name: Test (workflow contracts without the Lean oracle)
         run: cargo test --test workflow_plan_scope -- --skip diff_
+      - name: Test (authority, stage, and review contracts without the Lean oracle or Unix fixtures)
+        run: cargo test --test workflow_authority_stage_review -- --skip diff_ --skip sawyer_
       - name: Calibrate Birkin rules
         run: cargo run --quiet -- eval-rules
       - name: Run Birkin self-check

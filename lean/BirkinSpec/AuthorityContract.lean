@@ -5,7 +5,7 @@
   Proves fail-closed properties for delegated worker dispatch (`9-ops` / `xo`):
   1. Tiers form a strict total order `R < W < F`.
   2. Forbidden models are always rejected regardless of role or tier.
-  3. Tier `F` requires explicit per-unit authorization.
+  3. Tier `F` requires explicit per-unit authorization and a write-capable role.
   4. Read-only roles (`scope`, `review`, `research`, `docs`, `investigate`) reject tier `W`.
   5. Review role requires independence from the implementer (runtime or model differs).
   6. Refusal retries can never escalate approval tier above `prevTier`.
@@ -78,7 +78,7 @@ structure DispatchRequest where
 
 def tierWithinAuthority (req : DispatchRequest) : Bool :=
   if req.requestedTier == .F then
-    req.explicitFAuth
+    req.explicitFAuth && ApprovalTier.le .W req.role.maxDefaultTier
   else
     ApprovalTier.le req.requestedTier req.role.maxDefaultTier
 
@@ -115,6 +115,16 @@ theorem dispatchAdmitted_readonly_role_rejects_W (req : DispatchRequest)
     (hro : req.role.maxDefaultTier = .R) (hw : req.requestedTier = .W) :
     dispatchAdmitted req = false := by
   simp [dispatchAdmitted, tierWithinAuthority, hro, hw, ApprovalTier.le, ApprovalTier.rank]
+
+theorem dispatchAdmitted_readonly_role_requires_R (req : DispatchRequest)
+    (hro : req.role.maxDefaultTier = .R) (h : dispatchAdmitted req = true) :
+    req.requestedTier = .R := by
+  cases ht : req.requestedTier with
+  | R => rfl
+  | W =>
+    simp [dispatchAdmitted, tierWithinAuthority, hro, ht, ApprovalTier.le, ApprovalTier.rank] at h
+  | F =>
+    simp [dispatchAdmitted, tierWithinAuthority, hro, ht, ApprovalTier.le, ApprovalTier.rank] at h
 
 theorem dispatchAdmitted_review_requires_independence (req : DispatchRequest)
     (hr : req.role = .review) (hsr : req.sameImplRuntime = true) (hsm : req.sameImplModel = true) :

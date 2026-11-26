@@ -5,10 +5,11 @@
 //!   1. models: models, project_models, proof_models, workflow_models
 //!   2. utils: config_utils, imports_parser, ledger
 //!   3. engines: static_check, live, drift, guides, project_init, prove, prove_audit, prove_lean, sensors, semantic, verify,
-//!      plan_contract, scope_contract
+//!      plan_contract, scope_contract, authority_contract, stage_contract, review_closure
 //!   4. orchestration: gc, steer, hooks, report
 //!   5. cli: project_cli, ops_cli, cli, lib, main
 
+pub mod authority_contract;
 pub mod cli;
 pub mod config_utils;
 pub mod constants;
@@ -31,9 +32,11 @@ pub mod prove;
 pub mod prove_audit;
 pub mod prove_lean;
 pub mod report;
+pub mod review_closure;
 pub mod scope_contract;
 pub mod semantic;
 pub mod sensors;
+pub mod stage_contract;
 pub mod static_check;
 pub mod steer;
 pub mod verify;

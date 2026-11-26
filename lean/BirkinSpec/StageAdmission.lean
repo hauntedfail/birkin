@@ -58,8 +58,11 @@ def sawyerCommitValid (ev : StageEvidence) : Bool :=
 def verifiedOk (ev : StageEvidence) : Bool :=
   ev.treeBoundOk && ev.receiptChainOk && ev.toolchainMatched && testsComplete ev
 
+def reviewedOk (ev : StageEvidence) : Bool :=
+  verifiedOk ev && ev.reviewPassed
+
 def committedOk (ev : StageEvidence) : Bool :=
-  verifiedOk ev && sawyerCommitValid ev
+  reviewedOk ev && sawyerCommitValid ev
 
 def pushedOk (ev : StageEvidence) : Bool :=
   committedOk ev && ev.remoteHeadMatches
@@ -70,7 +73,7 @@ def ciPassedOk (ev : StageEvidence) : Bool :=
 def stageAdmitted : LifecycleStage → StageEvidence → Bool
   | .implemented, ev => ev.treeBoundOk
   | .verified, ev    => verifiedOk ev
-  | .reviewed, ev    => verifiedOk ev && ev.reviewPassed
+  | .reviewed, ev    => reviewedOk ev
   | .committed, ev   => committedOk ev
   | .pushed, ev      => pushedOk ev
   | .ciPassed, ev    => ciPassedOk ev
@@ -89,6 +92,10 @@ theorem stageAdmitted_partial_tests_false (ev : StageEvidence)
     exact Nat.not_le_of_gt hlt hle
   have ht : testsComplete ev = false := decide_eq_false hnot
   simp [stageAdmitted, verifiedOk, ht]
+
+theorem stageAdmitted_committed_requires_reviewed (ev : StageEvidence)
+    (h : stageAdmitted .committed ev = true) : stageAdmitted .reviewed ev = true :=
+  (Bool.and_eq_true _ _ |>.mp h).1
 
 theorem stageAdmitted_committed_requires_sawyer (ev : StageEvidence)
     (h : stageAdmitted .committed ev = true) :
