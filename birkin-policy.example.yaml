@@ -1,0 +1,41 @@
+# Birkin — Hermes Harness Mechanical Verification Policy (Fail-Closed)
+# Any violation of this policy causes `birkin static` to exit with code 1.
+version: 1
+
+fallback_providers:
+  # Fail-closed: no fallback provider/model is permitted unless explicitly listed here.
+  allowed: []
+  # Hard denylist (case-insensitive glob patterns matched against model and provider/model).
+  forbidden_patterns:
+    - "*opus*"
+    - "*claude-opus*"
+  # Require `fallback_providers` to be explicitly declared (e.g. `[]`) in config.yaml
+  # rather than omitted or commented out.
+  require_explicit_list: true
+  # Legacy top-level `fallback_model` must not be set.
+  forbid_legacy_fallback_model: true
+
+provider_invariants:
+  # Active model.default must have an explicit positive context_length under providers.<provider>.models.
+  require_context_length_for_default: true
+  # Non-empty auxiliary.<role>.model with provider=auto (or matching active provider) must be declared
+  # under providers.<active>.models with an explicit positive context_length.
+  require_auxiliary_models_declared: true
+  # Active provider key_env must exist and be non-empty in .env (or process env).
+  require_key_env_present: true
+
+compression_invariants:
+  threshold_min: 0.1
+  threshold_max: 0.95
+  require_target_ratio_lt_threshold: true
+
+live_contract:
+  timeout_seconds: 10
+  # Every model advertised by the active provider's /v1/models that includes context_length
+  # must be declared in providers.<active>.models with 0 < configured <= advertised.
+  require_catalog_context_length_coverage: true
+
+drift_invariants:
+  check_config_mtime_vs_gateway_start: true
+  check_env_mtime_vs_gateway_start: true
+  check_code_sha_vs_repo_head: true
