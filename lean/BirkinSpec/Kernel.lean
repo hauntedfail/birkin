@@ -12,7 +12,7 @@ open BirkinSpec
 
 namespace BirkinSpec.Kernel
 
-def kernelVersion : String := "0.5.0"
+def kernelVersion : String := "0.6.0"
 def contractVersion : Nat := 1
 
 private def reqField (obj : JVal) (key : String) : Except String JVal :=
