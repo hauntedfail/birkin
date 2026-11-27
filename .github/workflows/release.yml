@@ -71,7 +71,7 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri https://raw.githubusercontent.com/leanprover/elan/master/elan-init.ps1 -OutFile elan-init.ps1
-          .\elan-init.ps1 -y --default-toolchain none
+          .\elan-init.ps1 -NoPrompt $true -DefaultToolchain none
           $elanBin = Join-Path $env:USERPROFILE ".elan\bin"
           Add-Content -Path $env:GITHUB_PATH -Value $elanBin
           $tc = (Get-Content -Raw lean/lean-toolchain).Trim()
