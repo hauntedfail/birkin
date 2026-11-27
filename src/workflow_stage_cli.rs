@@ -3,15 +3,16 @@
 
 use crate::config_utils::sha256_hex;
 use crate::constants::{EXIT_PASS, EXIT_STATIC};
+use crate::lean_certify::{attach_attestation, CertObligation};
 use crate::ledger::{read_receipts, resolve_ledger_path, verify_receipts_for_current_state};
 use crate::project_models::{ProjectFinding, ProjectSpec};
 use crate::review_closure::verify_review_closure;
 use crate::stage_contract::{
-    parse_test_counts, stage_admitted, verify_sawyer, verify_toolchain_pins, SawyerPhase,
+    parse_test_counts, verify_sawyer, verify_stage_admission, verify_toolchain_pins, SawyerPhase,
 };
 use crate::workflow_cli::{
-    emit_output, emit_tool_error, format_findings, load_workflow_repo, record_workflow_receipt,
-    workflow_finding, WorkflowRepoArgs,
+    emit_output, emit_tool_error, format_findings, load_workflow_repo, maybe_certify,
+    record_workflow_receipt, workflow_finding, WorkflowRepoArgs,
 };
 use crate::workflow_models::{
     LifecycleStage, ReviewStateDocument, SawyerContextPack, StageEvidenceInput,
@@ -382,12 +383,33 @@ pub fn handle_sawyer_verify(pack_path: &Path, phase_raw: &str, common: &Workflow
     };
     let pack_str = pack_path.to_string_lossy().into_owned();
     let res = verify_sawyer(&repo_root, &pack, phase, spec.workflow.exclude_whitelist_path.as_deref());
-    let admitted = res.is_ok();
+    let sawyer_ok = res.is_ok();
     let error = res.err();
     let mut findings = Vec::new();
     if let Some(ref msg) = error {
         findings.push(workflow_finding("SAWYER_CONTRACT_VIOLATION", Some(pack_str.clone()), msg.clone(), "Fix repository branch, staging, exclusions, signature, or remote push state."));
     }
+    let stage = match phase {
+        SawyerPhase::Preflight => LifecycleStage::Implemented,
+        SawyerPhase::Staged => LifecycleStage::Committed,
+        SawyerPhase::PostPush => LifecycleStage::Pushed,
+    };
+    let ev = StageEvidenceInput {
+        discovered_tests: 1, executed_tests: 1, toolchain_matched: true, receipt_chain_ok: true,
+        tree_bound_ok: sawyer_ok, review_passed: true, sawyer_staged_exact: sawyer_ok,
+        sawyer_excluded_clean: sawyer_ok, gpg_sign_required: pack.require_signed.unwrap_or(false),
+        gpg_sig_valid: sawyer_ok, remote_head_matches: sawyer_ok && phase == SawyerPhase::PostPush,
+        ci_passed: false, release_authorized: false,
+    };
+    let (stage_kreq, kernel_verdict) = match verify_stage_admission(stage, &ev) {
+        Ok(v) => v,
+        Err(e) => return emit_tool_error("sawyer-verify", &e, common.as_json),
+    };
+    let cert = match maybe_certify(common.certify, common.emit_proof.as_deref(), CertObligation::Stage(stage_kreq)) {
+        Ok(c) => c,
+        Err(e) => return emit_tool_error("sawyer-verify", &e, common.as_json),
+    };
+    let admitted = sawyer_ok && kernel_verdict.admitted && cert.as_ref().is_none_or(|c| c.certified);
     let exit_code = if admitted { EXIT_PASS } else { EXIT_STATIC };
     let dur_ms = t0.elapsed().as_millis();
     let mut meta = Map::new();
@@ -395,18 +417,20 @@ pub fn handle_sawyer_verify(pack_path: &Path, phase_raw: &str, common: &Workflow
     meta.insert("phase".into(), json!(phase_label));
     meta.insert("target_branch".into(), json!(pack.target_branch));
     meta.insert("admitted".into(), json!(admitted));
-    let (receipt_sha, receipt_error) = record_workflow_receipt(
-        &repo_root, &spec, "sawyer-verify", &common.surface, common.no_receipt,
-        exit_code, dur_ms, &findings, std::slice::from_ref(&pack_str), meta,
-    );
-    let report = json!({
+    let mut report = json!({
         "command": "sawyer-verify", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
         "pack": pack_str, "phase": phase_label, "target_branch": pack.target_branch,
         "status": if admitted { "PASS" } else { "FAIL" }, "exit_code": exit_code,
         "duration_ms": dur_ms as u64, "admitted": admitted, "error": error, "findings": findings,
         "contract_enabled": spec.workflow.contract_enabled("sawyer"),
-        "receipt_sha256": receipt_sha, "receipt_error": receipt_error,
     });
+    attach_attestation(&mut meta, &mut report, cert.as_ref());
+    let (receipt_sha, receipt_error) = record_workflow_receipt(
+        &repo_root, &spec, "sawyer-verify", &common.surface, common.no_receipt,
+        exit_code, dur_ms, &findings, std::slice::from_ref(&pack_str), meta,
+    );
+    report["receipt_sha256"] = json!(receipt_sha);
+    report["receipt_error"] = json!(receipt_error);
     let mut lines = vec![format!(
         "birkin sawyer verify ({}): phase={phase_label} branch={} status={} ({dur_ms}ms)",
         spec.project.name, pack.target_branch, if admitted { "PASS" } else { "FAIL" }
@@ -515,7 +539,15 @@ pub fn handle_stage_verify(args: StageVerifyArgs) -> i32 {
         gpg_sig_valid: sawyer.gpg_valid, remote_head_matches: sawyer.remote_head_matches,
         ci_passed: ci_att.value, release_authorized: release_att.value,
     };
-    let admitted = stage_admitted(stage, &ev);
+    let (stage_kreq, kernel_verdict) = match verify_stage_admission(stage, &ev) {
+        Ok(v) => v,
+        Err(e) => return emit_tool_error("stage-verify", &e, args.common.as_json),
+    };
+    let cert = match maybe_certify(args.common.certify, args.common.emit_proof.as_deref(), CertObligation::Stage(stage_kreq)) {
+        Ok(c) => c,
+        Err(e) => return emit_tool_error("stage-verify", &e, args.common.as_json),
+    };
+    let admitted = kernel_verdict.admitted && cert.as_ref().is_none_or(|c| c.certified);
     let exit_code = if admitted { EXIT_PASS } else { EXIT_STATIC };
     let dur_ms = t0.elapsed().as_millis();
     let evidence_json = json!({
@@ -538,17 +570,20 @@ pub fn handle_stage_verify(args: StageVerifyArgs) -> i32 {
     meta.insert("stage".into(), json!(stage.as_str()));
     meta.insert("admitted".into(), json!(admitted));
     meta.insert("evidence".into(), evidence_json.clone());
-    let (receipt_sha, receipt_error) = record_workflow_receipt(
-        &repo_root, &spec, "stage-verify", &args.common.surface, args.common.no_receipt,
-        exit_code, dur_ms, &findings, &checked_files, meta,
-    );
-    let report = json!({
+    let mut report = json!({
         "command": "stage-verify", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
         "stage": stage.as_str(), "status": if admitted { "PASS" } else { "FAIL" },
         "exit_code": exit_code, "duration_ms": dur_ms as u64, "admitted": admitted,
         "contract_enabled": spec.workflow.contract_enabled("stage"), "evidence": evidence_json,
-        "findings": findings, "receipt_sha256": receipt_sha, "receipt_error": receipt_error,
+        "findings": findings,
     });
+    attach_attestation(&mut meta, &mut report, cert.as_ref());
+    let (receipt_sha, receipt_error) = record_workflow_receipt(
+        &repo_root, &spec, "stage-verify", &args.common.surface, args.common.no_receipt,
+        exit_code, dur_ms, &findings, &checked_files, meta,
+    );
+    report["receipt_sha256"] = json!(receipt_sha);
+    report["receipt_error"] = json!(receipt_error);
     let mut lines = vec![format!(
         "birkin stage verify ({}): stage={} status={} tests={}/{} findings={} ({dur_ms}ms)",
         spec.project.name, stage.as_str(), if admitted { "PASS" } else { "FAIL" },

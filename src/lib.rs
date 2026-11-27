@@ -20,6 +20,8 @@ pub mod glob;
 pub mod guides;
 pub mod hooks;
 pub mod imports_parser;
+pub mod lean_certify;
+pub mod lean_kernel;
 pub mod ledger;
 pub mod live;
 pub mod models;

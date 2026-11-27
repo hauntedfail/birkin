@@ -23,12 +23,18 @@ jobs:
           - os: macos-latest
             asset: birkin-darwin-arm64
             bin: target/release/birkin
+            kernel_asset: birkin-kernel-darwin-arm64
+            kernel_bin: lean/.lake/build/bin/birkin-kernel
           - os: ubuntu-latest
             asset: birkin-linux-amd64
             bin: target/release/birkin
+            kernel_asset: birkin-kernel-linux-amd64
+            kernel_bin: lean/.lake/build/bin/birkin-kernel
           - os: windows-latest
             asset: birkin-windows-amd64.exe
             bin: target/release/birkin.exe
+            kernel_asset: birkin-kernel-windows-amd64.exe
+            kernel_bin: lean/.lake/build/bin/birkin-kernel.exe
     runs-on: ${{ matrix.os }}
     env:
       TAG: ${{ inputs.tag || github.ref_name }}
@@ -52,25 +58,55 @@ jobs:
             exit 1
           fi
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install elan (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          "$HOME/.elan/bin/elan" toolchain install "$(tr -d '[:space:]' < lean/lean-toolchain)"
+          "$HOME/.elan/bin/elan" default "$(tr -d '[:space:]' < lean/lean-toolchain)"
+      - name: Install elan (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://raw.githubusercontent.com/leanprover/elan/master/elan-init.ps1 -OutFile elan-init.ps1
+          .\elan-init.ps1 -y --default-toolchain none
+          $elanBin = Join-Path $env:USERPROFILE ".elan\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $elanBin
+          $tc = (Get-Content -Raw lean/lean-toolchain).Trim()
+          & (Join-Path $elanBin "elan.exe") toolchain install $tc
+          & (Join-Path $elanBin "elan.exe") default $tc
+      - name: Build Lean 4 decision kernel
+        shell: bash
+        run: cd lean && lake build birkin-kernel
       - name: Build release binary
         shell: bash
         run: cargo build --release --locked
-      - name: Verify release binary and stage asset
+      - name: Verify release binaries and stage assets
         shell: bash
         env:
           BIN_PATH: ${{ matrix.bin }}
           ASSET_NAME: ${{ matrix.asset }}
+          KERNEL_BIN_PATH: ${{ matrix.kernel_bin }}
+          KERNEL_ASSET_NAME: ${{ matrix.kernel_asset }}
         run: |
           set -euo pipefail
           out="$("./$BIN_PATH" --version)"
           echo "Built: $out"
           [[ "$out" == "birkin ${TAG#v}" ]]
+          kout="$("./$KERNEL_BIN_PATH" --version)"
+          echo "Built kernel: $kout"
+          [[ "$kout" == birkin-kernel* ]]
           mkdir -p dist
           cp "$BIN_PATH" "dist/$ASSET_NAME"
+          cp "$KERNEL_BIN_PATH" "dist/$KERNEL_ASSET_NAME"
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
+          path: |
+            dist/${{ matrix.asset }}
+            dist/${{ matrix.kernel_asset }}
           if-no-files-found: error
 
   publish:
@@ -92,8 +128,11 @@ jobs:
           set -euo pipefail
           [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
           cd dist
-          chmod +x birkin-darwin-arm64 birkin-linux-amd64
-          sha256sum birkin-darwin-arm64 birkin-linux-amd64 birkin-windows-amd64.exe > SHA256SUMS
+          chmod +x birkin-darwin-arm64 birkin-linux-amd64 birkin-kernel-darwin-arm64 birkin-kernel-linux-amd64
+          sha256sum \
+            birkin-darwin-arm64 birkin-linux-amd64 birkin-windows-amd64.exe \
+            birkin-kernel-darwin-arm64 birkin-kernel-linux-amd64 birkin-kernel-windows-amd64.exe \
+            > SHA256SUMS
           sha256sum --check SHA256SUMS
           cat SHA256SUMS
       - name: Publish GitHub Release
@@ -106,6 +145,9 @@ jobs:
               dist/birkin-darwin-arm64 \
               dist/birkin-linux-amd64 \
               dist/birkin-windows-amd64.exe \
+              dist/birkin-kernel-darwin-arm64 \
+              dist/birkin-kernel-linux-amd64 \
+              dist/birkin-kernel-windows-amd64.exe \
               dist/SHA256SUMS \
               --clobber
           else
@@ -114,6 +156,9 @@ jobs:
               dist/birkin-darwin-arm64 \
               dist/birkin-linux-amd64 \
               dist/birkin-windows-amd64.exe \
+              dist/birkin-kernel-darwin-arm64 \
+              dist/birkin-kernel-linux-amd64 \
+              dist/birkin-kernel-windows-amd64.exe \
               dist/SHA256SUMS \
               --verify-tag \
               --title "Birkin $TAG" \

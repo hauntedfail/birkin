@@ -1,6 +1,10 @@
-//! File-scope containment, symlink escape detection, and concurrent write-disjointness engine
-//! aligned with `BirkinSpec.ScopeContract`.
+//! File-scope containment, symlink escape detection, and concurrent write-disjointness engine.
+//!
+//! Rust performs OS realpath/symlink containment, rule matching, and Git diff collection;
+//! all path-admission and concurrent write-disjointness verdicts are computed directly by
+//! the Lean 4 decision kernel (`BirkinSpec.ScopeContract`).
 
+use crate::lean_kernel::{eval_scope, KernelPathDecision, KernelScopeRequest};
 use crate::project_models::ProjectFinding;
 use crate::workflow_models::{ActiveUnitRecord, PlanTaskSpec};
 use serde::{Deserialize, Serialize};
@@ -15,6 +19,15 @@ use std::process::Command;
 pub enum PathAuthority {
     SourceEdit,
     VerificationOutput,
+}
+
+impl PathAuthority {
+    pub fn as_wire(self) -> &'static str {
+        match self {
+            Self::SourceEdit => "source",
+            Self::VerificationOutput => "verification_output",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,23 +46,7 @@ pub struct ScopeOutcome {
     pub decisions: Vec<PathDecision>,
     pub overlapping_writes: Vec<String>,
     pub findings: Vec<ProjectFinding>,
-}
-
-/// Core boolean decision mirroring `BirkinSpec.pathAdmitted`.
-pub fn path_admitted_bool(
-    auth: PathAuthority,
-    inside_root: bool,
-    matched_allowed: bool,
-    matched_forbidden: bool,
-    matched_verify_output: bool,
-) -> bool {
-    if !inside_root || matched_forbidden {
-        return false;
-    }
-    match auth {
-        PathAuthority::SourceEdit => matched_allowed,
-        PathAuthority::VerificationOutput => matched_allowed || matched_verify_output,
-    }
+    pub kernel_error: Option<String>,
 }
 
 /// Match a repo-relative POSIX spelling against an exact file or directory rule.
@@ -61,12 +58,6 @@ pub fn scoped_entry_matches(rel_posix: &str, scoped: &str) -> bool {
     } else {
         rel == rule
     }
-}
-
-/// Two declared write paths conflict when equal or when one is a directory prefix of the other.
-pub fn write_paths_overlap(a: &str, b: &str) -> bool {
-    let (a, b) = (a.trim_end_matches('/'), b.trim_end_matches('/'));
-    a == b || a.starts_with(&format!("{b}/")) || b.starts_with(&format!("{a}/"))
 }
 
 struct ScopePath {
@@ -118,7 +109,6 @@ fn resolve_scope_path(root: &Path, canonical_root: &Path, raw: &str) -> Option<S
         resolved.push(name);
         match fs::symlink_metadata(&resolved) {
             Ok(_) => {
-                // An existing link must resolve even when its target has disappeared.
                 resolved = fs::canonicalize(&resolved).ok()?;
                 resolved.strip_prefix(canonical_root).ok()?;
                 resolved.to_str()?;
@@ -159,26 +149,27 @@ impl ScopePath {
         let forbidden = names
             .iter()
             .any(|name| matches(name, &task.forbidden_paths));
-        // Each name may use either grant for verification, including a mixed source/output pair.
         let verified_output =
             (output[0] || output[1]) && (allowed[0] || output[0]) && (allowed[1] || output[1]);
         (allowed[0] && allowed[1], forbidden, verified_output)
     }
 }
 
-/// Evaluate a list of changed/target paths plus optional concurrent active-unit write sets.
-pub fn verify_task_scope(
+/// Evaluate task scope via the Lean 4 decision kernel, returning `Err` on kernel failure
+/// and also returning the exact `KernelScopeRequest` for Mode B certification.
+pub fn verify_task_scope_checked(
     checkout_root: &Path,
     task: &PlanTaskSpec,
     changed_paths: &[String],
     auth: PathAuthority,
     other_active_units: &[ActiveUnitRecord],
-) -> ScopeOutcome {
-    let mut decisions = Vec::new();
+) -> Result<(ScopeOutcome, KernelScopeRequest), String> {
     let mut findings = Vec::new();
     let mut normalized_writes = BTreeSet::new();
     let canonical_root = checkout_directory(checkout_root);
 
+    let mut raw_entries: Vec<(String, String, KernelPathDecision)> =
+        Vec::with_capacity(changed_paths.len());
     for raw in changed_paths {
         let path = canonical_root
             .as_deref()
@@ -186,46 +177,22 @@ pub fn verify_task_scope(
         let inside_root = path.is_some();
         let (matched_allowed, matched_forbidden, matched_verify_output) =
             path.as_ref().map(|p| p.matches(task)).unwrap_or_default();
-        let admitted = path_admitted_bool(
-            auth,
-            inside_root,
-            matched_allowed,
-            matched_forbidden,
-            matched_verify_output,
-        );
-        if !admitted {
-            let rel_posix = path.as_ref().map_or(raw.as_str(), |p| &p.canonical);
-            let rule = if !inside_root {
-                "SCOPE_ROOT_ESCAPE"
-            } else if matched_forbidden {
-                "SCOPE_FORBIDDEN_PATH"
-            } else if matched_verify_output && auth == PathAuthority::SourceEdit {
-                "SCOPE_VERIFY_OUTPUT_SOURCE_EDIT"
-            } else {
-                "SCOPE_OUT_OF_BOUNDS"
-            };
-            findings.push(ProjectFinding {
-                rule: rule.into(),
-                category: "workflow".into(),
-                severity: "error".into(),
-                file: Some(raw.clone()),
-                line: None,
-                message: format!("Path '{raw}' (resolved '{rel_posix}') is not admitted for task '{}'.", task.id),
-                remediation: "Keep edits inside allowed_paths, never touch forbidden_paths, and do not escape checkout_root.".into(),
-                details: BTreeMap::new(),
-            });
+        let rel_posix = path
+            .as_ref()
+            .map_or_else(|| raw.clone(), |p| p.canonical.clone());
+        if let Some(p) = path {
+            normalized_writes.extend([p.lexical, p.canonical]);
         }
-        if let Some(path) = path {
-            normalized_writes.extend([path.lexical, path.canonical]);
-        }
-        decisions.push(PathDecision {
-            path: raw.clone(),
-            inside_root,
-            matched_allowed,
-            matched_forbidden,
-            matched_verify_output,
-            admitted,
-        });
+        raw_entries.push((
+            raw.clone(),
+            rel_posix,
+            KernelPathDecision {
+                inside_root,
+                matched_allowed,
+                matched_forbidden,
+                matched_verify_output,
+            },
+        ));
     }
 
     let mut other_writes = BTreeSet::new();
@@ -249,32 +216,114 @@ pub fn verify_task_scope(
         }
     }
 
-    let mut overlapping_writes = Vec::new();
-    for w in &normalized_writes {
-        if other_writes.iter().any(|o| write_paths_overlap(w, o)) {
-            overlapping_writes.push(w.clone());
+    let kernel_req = KernelScopeRequest {
+        authority: auth.as_wire().into(),
+        decisions: raw_entries.iter().map(|(_, _, d)| d.clone()).collect(),
+        my_writes: normalized_writes.into_iter().collect(),
+        other_active_writes: other_writes.into_iter().collect(),
+    };
+
+    let kscope = eval_scope(&kernel_req)?;
+    if kscope.path_admitted.len() != raw_entries.len() {
+        return Err(format!(
+            "Lean kernel returned {} path decisions for {} paths",
+            kscope.path_admitted.len(),
+            raw_entries.len()
+        ));
+    }
+
+    let mut decisions = Vec::with_capacity(raw_entries.len());
+    for ((raw, rel_posix, kd), &admitted) in raw_entries.iter().zip(kscope.path_admitted.iter()) {
+        if !admitted {
+            let rule = if !kd.inside_root {
+                "SCOPE_ROOT_ESCAPE"
+            } else if kd.matched_forbidden {
+                "SCOPE_FORBIDDEN_PATH"
+            } else if kd.matched_verify_output && auth == PathAuthority::SourceEdit {
+                "SCOPE_VERIFY_OUTPUT_SOURCE_EDIT"
+            } else {
+                "SCOPE_OUT_OF_BOUNDS"
+            };
             findings.push(ProjectFinding {
-                rule: "SCOPE_CONCURRENT_WRITE_OVERLAP".into(),
+                rule: rule.into(),
                 category: "workflow".into(),
                 severity: "error".into(),
-                file: Some(w.clone()),
+                file: Some(raw.clone()),
                 line: None,
                 message: format!(
-                    "Path '{w}' overlaps with another active mutating unit on the same checkout."
+                    "Path '{raw}' (resolved '{rel_posix}') is not admitted for task '{}'.",
+                    task.id
                 ),
-                remediation: "Serialize overlapping units or isolate them in separate worktrees."
-                    .into(),
+                remediation: "Keep edits inside allowed_paths, never touch forbidden_paths, and do not escape checkout_root.".into(),
                 details: BTreeMap::new(),
             });
         }
+        decisions.push(PathDecision {
+            path: raw.clone(),
+            inside_root: kd.inside_root,
+            matched_allowed: kd.matched_allowed,
+            matched_forbidden: kd.matched_forbidden,
+            matched_verify_output: kd.matched_verify_output,
+            admitted,
+        });
     }
 
-    let admitted = findings.is_empty() && canonical_root.is_some();
-    ScopeOutcome {
-        admitted,
-        decisions,
-        overlapping_writes,
-        findings,
+    for w in &kscope.overlapping_writes {
+        findings.push(ProjectFinding {
+            rule: "SCOPE_CONCURRENT_WRITE_OVERLAP".into(),
+            category: "workflow".into(),
+            severity: "error".into(),
+            file: Some(w.clone()),
+            line: None,
+            message: format!(
+                "Path '{w}' overlaps with another active mutating unit on the same checkout."
+            ),
+            remediation: "Serialize overlapping units or isolate them in separate worktrees."
+                .into(),
+            details: BTreeMap::new(),
+        });
+    }
+
+    let admitted = kscope.verdict.admitted && findings.is_empty() && canonical_root.is_some();
+    Ok((
+        ScopeOutcome {
+            admitted,
+            decisions,
+            overlapping_writes: kscope.overlapping_writes,
+            findings,
+            kernel_error: None,
+        },
+        kernel_req,
+    ))
+}
+
+/// Evaluate a list of changed/target paths plus optional concurrent active-unit write sets,
+/// failing closed if the Lean 4 decision kernel is unavailable.
+pub fn verify_task_scope(
+    checkout_root: &Path,
+    task: &PlanTaskSpec,
+    changed_paths: &[String],
+    auth: PathAuthority,
+    other_active_units: &[ActiveUnitRecord],
+) -> ScopeOutcome {
+    match verify_task_scope_checked(checkout_root, task, changed_paths, auth, other_active_units) {
+        Ok((outcome, _)) => outcome,
+        Err(err) => ScopeOutcome {
+            admitted: false,
+            decisions: Vec::new(),
+            overlapping_writes: Vec::new(),
+            findings: vec![ProjectFinding {
+                rule: "SCOPE_KERNEL_ERROR".into(),
+                category: "workflow".into(),
+                severity: "error".into(),
+                file: None,
+                line: None,
+                message: err.clone(),
+                remediation: "Build or install birkin-kernel (`cd lean && lake build`).".into(),
+                details: BTreeMap::new(),
+            }],
+            kernel_error: Some(err),
+        },
     }
 }
 
@@ -285,10 +334,7 @@ fn unresolved_writer(unit: &ActiveUnitRecord, path: &str) -> ProjectFinding {
         severity: "error".into(),
         file: Some(path.into()),
         line: None,
-        message: format!(
-            "Cannot verify write scope for active task '{}'.",
-            unit.task_id
-        ),
+        message: format!("Cannot verify write scope for active task '{}'.", unit.task_id),
         remediation: "Provide a resolvable checkout and checkout-relative write set.".into(),
         details: BTreeMap::new(),
     }

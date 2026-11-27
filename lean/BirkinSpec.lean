@@ -7,3 +7,5 @@ import BirkinSpec.ScopeContract
 import BirkinSpec.AuthorityContract
 import BirkinSpec.StageAdmission
 import BirkinSpec.ReviewClosure
+import BirkinSpec.Json
+import BirkinSpec.Diagnostics

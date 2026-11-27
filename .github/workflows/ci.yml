@@ -43,14 +43,30 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      - name: Install elan (Lean 4)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://raw.githubusercontent.com/leanprover/elan/master/elan-init.ps1 -OutFile elan-init.ps1
+          .\elan-init.ps1 -y --default-toolchain none
+          $elanBin = Join-Path $env:USERPROFILE ".elan\bin"
+          Add-Content -Path $env:GITHUB_PATH -Value $elanBin
+          $tc = (Get-Content -Raw lean/lean-toolchain).Trim()
+          & (Join-Path $elanBin "elan.exe") toolchain install $tc
+          & (Join-Path $elanBin "elan.exe") default $tc
+      - name: Build Lean 4 proofs and birkin-kernel
+        shell: pwsh
+        run: |
+          Push-Location lean
+          lake build
+          Pop-Location
       - name: Lint (clippy)
         run: cargo clippy --all-targets -- -D warnings
-      - name: Test (Rust unit and integration suites)
-        run: cargo test --lib --test project_engine --test parsers_and_verify --test hermes_runtime --test semantic_and_hooks --test git_workflows
-      - name: Test (workflow contracts without the Lean oracle)
-        run: cargo test --test workflow_plan_scope --test workflow_scope_paths --test workflow_plan_schema -- --skip diff_
-      - name: Test (authority, stage, and review contracts without the Lean oracle or Unix fixtures)
-        run: cargo test --test workflow_authority_stage_review -- --skip diff_ --skip sawyer_
+      - name: Test (Rust unit, Lean kernel, and integration suites)
+        run: cargo test --lib --test project_engine --test parsers_and_verify --test hermes_runtime --test semantic_and_hooks --test git_workflows --test lean_kernel_and_certify --test lean_oracle_diff
+      - name: Test (workflow plan and scope contracts backed by birkin-kernel)
+        run: cargo test --test workflow_plan_scope --test workflow_scope_paths --test workflow_plan_schema
+      - name: Test (authority, stage, and review contracts without Unix-only Sawyer fixtures)
+        run: cargo test --test workflow_authority_stage_review -- --skip sawyer_
       - name: Test (workflow CLI end-to-end without Unix-only fixtures)
         run: cargo test --test workflow_cli_e2e -- --skip unix_
       - name: Test (client adapter sync and drift without Unix-only symlink fixtures)

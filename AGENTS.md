@@ -9,7 +9,7 @@ Birkin is a native Rust verification engine (sub-10ms cold start) backed by a ma
 - Project specification: [.birkin/config.yaml](.birkin/config.yaml)
 - Human overview & CLI reference: [README.md](README.md)
 - Hermes policy example: [birkin-policy.example.yaml](birkin-policy.example.yaml)
-- Formal proof kernel: [lean/lakefile.toml](lean/lakefile.toml) (`BirkinSpec.*` + `birkin-oracle`)
+- Formal proof kernel: [lean/lakefile.toml](lean/lakefile.toml) (`BirkinSpec.*` + `birkin-kernel` + `birkin-oracle`)
 - CI pipeline: [.github/workflows/ci.yml](.github/workflows/ci.yml)
 
 ## Enforced Architecture DAG (`src/`)
@@ -18,9 +18,9 @@ Imports may only point downward; `birkin check` enforces this mechanically, `bir
 
 1. **core**: `constants.rs`, `glob.rs` (no internal imports)
 2. **models**: `models.rs`, `project_models.rs`, `proof_models.rs`, `workflow_models.rs` -> `core`
-3. **utils**: `config_utils.rs`, `imports_parser.rs`, `ledger.rs` -> `core`, `models`
-4. **engines**: `static_check.rs`, `live.rs`, `drift.rs`, `guides.rs`, `project_init.rs`, `prove.rs`, `prove_audit.rs`, `prove_lean.rs`, `sensors.rs`, `semantic.rs`, `verify.rs`, `plan_contract.rs`, `scope_contract.rs`, `authority_contract.rs`, `stage_contract.rs`, `review_closure.rs` -> `core`, `models`, `utils`
-5. **orchestration**: `gc.rs`, `steer.rs`, `hooks.rs`, `report.rs` -> `core`, `models`, `utils`, `engines`
+3. **utils**: `config_utils.rs`, `imports_parser.rs`, `lean_kernel.rs`, `ledger.rs` -> `core`, `models`
+4. **engines**: `static_check.rs`, `live.rs`, `drift.rs`, `guides.rs`, `lean_certify.rs`, `project_init.rs`, `prove.rs`, `prove_audit.rs`, `prove_lean.rs`, `sensors.rs`, `semantic.rs`, `verify.rs`, `plan_contract.rs`, `scope_contract.rs`, `authority_contract.rs`, `stage_contract.rs`, `review_closure.rs` -> `core`, `models`, `utils`
+5. **orchestration**: `client_sync.rs`, `gc.rs`, `steer.rs`, `hooks.rs`, `report.rs` -> `core`, `models`, `utils`, `engines`
 6. **cli**: `cli.rs`, `project_cli.rs`, `ops_cli.rs`, `workflow_cli.rs`, `workflow_stage_cli.rs`, `lib.rs`, `main.rs` -> lower layers
 
 ## Formal Kernel (`lean/BirkinSpec/`)
@@ -31,8 +31,9 @@ Zero `sorry` placeholders permitted:
 - `LayerDag.lean`: topological rank soundness and acyclicity of Birkin's 6-layer DAG.
 - `Receipt.lean`: fail-closed hash-chain tamper detection and admission-gate invariants.
 - `Policy.lean`: denylist dominance over allowlists and exact compression bounds.
-- `PlanContract.lean`, `ScopeContract.lean`, `AuthorityContract.lean`, `StageAdmission.lean`, `ReviewClosure.lean`: workflow-contract invariants exposed via `birkin plan|unit|stage|sawyer|review-closure`.
-- `Oracle.lean`: executable `birkin-oracle` differentially tested against Rust in `cargo test`.
+- `PlanContract.lean`, `ScopeContract.lean`, `AuthorityContract.lean`, `StageAdmission.lean`, `ReviewClosure.lean`: workflow-contract invariants.
+- `Json.lean`, `Diagnostics.lean`, `Kernel.lean`: zero-dependency JSON codec, proved diagnostic equivalence theorems, and the production `birkin-kernel` executable (Mode A, ~10 ms, fail-closed) paired with `--certify` Lean kernel certificates (Mode B, ~0.3 s, `#print axioms` audited).
+- `Oracle.lean`: legacy line-oriented `birkin-oracle` retained for differential checks.
 
 ## Non-Negotiable Invariants
 

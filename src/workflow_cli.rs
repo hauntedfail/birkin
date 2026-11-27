@@ -1,16 +1,22 @@
 //! Workflow-contract CLI subcommands: plan, unit, stage, sawyer, and review-closure.
 
-use crate::authority_contract::verify_dispatch;
+use crate::authority_contract::verify_dispatch_checked;
 use crate::config_utils::load_policy;
 use crate::constants::{EXIT_PASS, EXIT_STATIC, EXIT_TOOL_ERROR};
+use crate::lean_certify::{
+    attach_attestation, certify_obligation, certify_pair, CertObligation, CertificationOutcome,
+};
 use crate::ledger::append_receipt;
-use crate::plan_contract::{can_dispatch_mutating, load_plan_document, validate_plan_document};
+use crate::plan_contract::{
+    build_plan_kernel_request, load_plan_document, validate_plan_document,
+    verify_plan_dispatch_checked,
+};
 use crate::project_init::detect_project_spec;
 use crate::project_models::{
     find_repo_root, find_spec_file, load_project_spec, ProjectFinding, ProjectSpec,
 };
-use crate::review_closure::verify_review_closure;
-use crate::scope_contract::{collect_git_changed_paths, verify_task_scope, PathAuthority};
+use crate::review_closure::verify_review_closure_checked;
+use crate::scope_contract::{collect_git_changed_paths, verify_task_scope_checked, PathAuthority};
 use crate::workflow_models::{
     ActiveUnitRecord, AgentRole, ApprovalTier, DispatchManifest, ReviewStateDocument,
 };
@@ -24,51 +30,28 @@ use std::time::Instant;
 
 #[derive(Args, Debug, Clone)]
 pub struct WorkflowRepoArgs {
-    /// Repository directory (defaults to current working directory)
-    #[arg(long, default_value = ".")]
-    pub repo: PathBuf,
-    /// Explicit .birkin/config.yaml path
-    #[arg(long)]
-    pub spec: Option<PathBuf>,
-    /// Execution surface recorded in receipts
-    #[arg(long, default_value = "cli")]
-    pub surface: String,
-    /// Emit machine-readable JSON output
-    #[arg(long = "json")]
-    pub as_json: bool,
-    /// Skip appending a receipt to the ledger
-    #[arg(long)]
-    pub no_receipt: bool,
+    #[arg(long, default_value = ".")] pub repo: PathBuf,
+    #[arg(long)] pub spec: Option<PathBuf>,
+    #[arg(long, default_value = "cli")] pub surface: String,
+    #[arg(long = "json")] pub as_json: bool,
+    #[arg(long)] pub no_receipt: bool,
+    #[arg(long)] pub certify: bool,
+    #[arg(long = "emit-proof")] pub emit_proof: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
 pub enum WorkflowCommand {
     /// Verify execution plans against the workflow plan contract
-    Plan {
-        #[command(subcommand)]
-        action: PlanAction,
-    },
+    Plan { #[command(subcommand)] action: PlanAction },
     /// Admit a delegated unit or verify its file-scope containment
-    Unit {
-        #[command(subcommand)]
-        action: UnitAction,
-    },
+    Unit { #[command(subcommand)] action: UnitAction },
     /// Verify lifecycle stage admission from observed and attested evidence
-    Stage {
-        #[command(subcommand)]
-        action: StageAction,
-    },
+    Stage { #[command(subcommand)] action: StageAction },
     /// Verify Git staging, commit, signature, and remote head via Sawyer context pack
-    Sawyer {
-        #[command(subcommand)]
-        action: SawyerAction,
-    },
+    Sawyer { #[command(subcommand)] action: SawyerAction },
     /// Verify canonical review-item closure before resolving threads or requesting re-review
     #[command(name = "review-closure")]
-    ReviewClosure {
-        #[command(subcommand)]
-        action: ReviewClosureAction,
-    },
+    ReviewClosure { #[command(subcommand)] action: ReviewClosureAction },
 }
 
 #[derive(Subcommand, Debug)]
@@ -84,62 +67,38 @@ pub enum PlanAction {
 
 #[derive(Args, Debug, Clone)]
 pub struct UnitAdmitArgs {
-    #[arg(long)]
-    pub plan: PathBuf,
-    #[arg(long)]
-    pub task: String,
-    #[arg(long)]
-    pub role: String,
-    #[arg(long)]
-    pub tier: String,
-    #[arg(long)]
-    pub explicit_f: bool,
-    #[arg(long)]
-    pub model: Option<String>,
-    #[arg(long)]
-    pub runtime: Option<String>,
-    #[arg(long)]
-    pub implementer_model: Option<String>,
-    #[arg(long)]
-    pub implementer_runtime: Option<String>,
-    #[arg(long = "forbidden-model")]
-    pub forbidden_models: Vec<String>,
-    #[arg(long)]
-    pub policy: Option<PathBuf>,
-    #[arg(long, default_value_t = 0)]
-    pub retries: u32,
-    #[arg(long)]
-    pub refusal: bool,
-    #[arg(long)]
-    pub prev_tier: Option<String>,
-    #[command(flatten)]
-    pub common: WorkflowRepoArgs,
+    #[arg(long)] pub plan: PathBuf,
+    #[arg(long)] pub task: String,
+    #[arg(long)] pub role: String,
+    #[arg(long)] pub tier: String,
+    #[arg(long)] pub explicit_f: bool,
+    #[arg(long)] pub model: Option<String>,
+    #[arg(long)] pub runtime: Option<String>,
+    #[arg(long)] pub implementer_model: Option<String>,
+    #[arg(long)] pub implementer_runtime: Option<String>,
+    #[arg(long = "forbidden-model")] pub forbidden_models: Vec<String>,
+    #[arg(long)] pub policy: Option<PathBuf>,
+    #[arg(long, default_value_t = 0)] pub retries: u32,
+    #[arg(long)] pub refusal: bool,
+    #[arg(long)] pub prev_tier: Option<String>,
+    #[command(flatten)] pub common: WorkflowRepoArgs,
 }
 
 #[derive(Args, Debug, Clone)]
 pub struct UnitVerifyScopeArgs {
-    #[arg(long)]
-    pub plan: PathBuf,
-    #[arg(long)]
-    pub task: String,
-    #[arg(long)]
-    pub repo: Option<PathBuf>,
-    #[arg(long)]
-    pub spec: Option<PathBuf>,
-    #[arg(long)]
-    pub staged: bool,
-    #[arg(long)]
-    pub active_units: Option<PathBuf>,
-    #[arg(long, default_value = "source")]
-    pub authority: String,
-    #[arg(long = "path")]
-    pub paths: Vec<String>,
-    #[arg(long, default_value = "cli")]
-    pub surface: String,
-    #[arg(long = "json")]
-    pub as_json: bool,
-    #[arg(long)]
-    pub no_receipt: bool,
+    #[arg(long)] pub plan: PathBuf,
+    #[arg(long)] pub task: String,
+    #[arg(long)] pub repo: Option<PathBuf>,
+    #[arg(long)] pub spec: Option<PathBuf>,
+    #[arg(long)] pub staged: bool,
+    #[arg(long)] pub active_units: Option<PathBuf>,
+    #[arg(long, default_value = "source")] pub authority: String,
+    #[arg(long = "path")] pub paths: Vec<String>,
+    #[arg(long, default_value = "cli")] pub surface: String,
+    #[arg(long = "json")] pub as_json: bool,
+    #[arg(long)] pub no_receipt: bool,
+    #[arg(long)] pub certify: bool,
+    #[arg(long = "emit-proof")] pub emit_proof: Option<PathBuf>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -232,6 +191,18 @@ pub(crate) fn workflow_finding(
     }
 }
 
+pub(crate) fn maybe_certify(
+    certify: bool,
+    emit_proof: Option<&Path>,
+    obl: CertObligation,
+) -> Result<Option<CertificationOutcome>, String> {
+    if certify || emit_proof.is_some() {
+        certify_obligation(&obl, emit_proof).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
 pub(crate) fn format_findings(findings: &[ProjectFinding]) -> Vec<String> {
     let mut lines = Vec::new();
     for f in findings {
@@ -299,7 +270,15 @@ fn handle_plan_verify(plan: &Path, common: &WorkflowRepoArgs) -> i32 {
         Err(e) => return emit_tool_error("plan-verify", &e, common.as_json),
     };
     let outcome = validate_plan_document(&doc);
-    let exit_code = if outcome.valid { EXIT_PASS } else { EXIT_STATIC };
+    if let Some(ref kerr) = outcome.kernel_error {
+        return emit_tool_error("plan-verify", kerr, common.as_json);
+    }
+    let cert = match maybe_certify(common.certify, common.emit_proof.as_deref(), CertObligation::Plan(build_plan_kernel_request(&doc))) {
+        Ok(c) => c,
+        Err(e) => return emit_tool_error("plan-verify", &e, common.as_json),
+    };
+    let valid = outcome.valid && cert.as_ref().is_none_or(|c| c.certified);
+    let exit_code = if valid { EXIT_PASS } else { EXIT_STATIC };
     let dur_ms = t0.elapsed().as_millis();
     let plan_str = plan.to_string_lossy().into_owned();
     let mut meta = Map::new();
@@ -308,22 +287,25 @@ fn handle_plan_verify(plan: &Path, common: &WorkflowRepoArgs) -> i32 {
     meta.insert("ready_tasks".into(), json!(outcome.ready_tasks));
     meta.insert("blocked_tasks".into(), json!(outcome.blocked_tasks));
     meta.insert("done_tasks".into(), json!(outcome.done_tasks));
+    let mut report = json!({
+        "command": "plan-verify", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
+        "plan": plan_str, "intent": doc.intent, "status": if valid { "PASS" } else { "FAIL" },
+        "exit_code": exit_code, "duration_ms": dur_ms as u64, "valid": valid,
+        "errors": outcome.errors, "ready_tasks": outcome.ready_tasks,
+        "blocked_tasks": outcome.blocked_tasks, "done_tasks": outcome.done_tasks,
+        "findings": outcome.findings, "contract_enabled": spec.workflow.contract_enabled("plan"),
+    });
+    attach_attestation(&mut meta, &mut report, cert.as_ref());
     let (receipt_sha, receipt_error) = record_workflow_receipt(
         &repo_root, &spec, "plan-verify", &common.surface, common.no_receipt,
         exit_code, dur_ms, &outcome.findings, std::slice::from_ref(&plan_str), meta,
     );
-    let report = json!({
-        "command": "plan-verify", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
-        "plan": plan_str, "intent": doc.intent, "status": if outcome.valid { "PASS" } else { "FAIL" },
-        "exit_code": exit_code, "duration_ms": dur_ms as u64, "valid": outcome.valid,
-        "errors": outcome.errors, "ready_tasks": outcome.ready_tasks,
-        "blocked_tasks": outcome.blocked_tasks, "done_tasks": outcome.done_tasks,
-        "findings": outcome.findings, "contract_enabled": spec.workflow.contract_enabled("plan"),
-        "receipt_sha256": receipt_sha, "receipt_error": receipt_error,
-    });
+    report["receipt_sha256"] = json!(receipt_sha);
+    report["receipt_error"] = json!(receipt_error);
+    let mode = if cert.is_some() { "lean_certified" } else { "lean_kernel" };
     let mut lines = vec![format!(
-        "birkin plan verify ({}): status={} intent={} ready={} blocked={} done={} errors={} ({dur_ms}ms)",
-        spec.project.name, if outcome.valid { "PASS" } else { "FAIL" }, doc.intent,
+        "birkin plan verify ({}): status={} mode={mode} intent={} ready={} blocked={} done={} errors={} ({dur_ms}ms)",
+        spec.project.name, if valid { "PASS" } else { "FAIL" }, doc.intent,
         outcome.ready_tasks.len(), outcome.blocked_tasks.len(), outcome.done_tasks.len(), outcome.errors.len()
     )];
     lines.extend(format_findings(&outcome.findings));
@@ -369,20 +351,33 @@ fn handle_unit_admit(args: UnitAdmitArgs) -> i32 {
         implementer_model: args.implementer_model, implementer_runtime: args.implementer_runtime,
         forbidden_model_patterns: args.forbidden_models,
     };
-    let plan_res = can_dispatch_mutating(&doc, &args.task);
-    let auth_res = verify_dispatch(&manifest, &policy_denylist);
-    let (plan_admitted, authority_admitted) = (plan_res.is_ok(), auth_res.is_ok());
-    let admitted = plan_admitted && authority_admitted;
-    let plan_str = args.plan.to_string_lossy().into_owned();
-    let mut errors = Vec::new();
-    let mut findings = Vec::new();
-    if let Err(reasons) = plan_res {
-        for r in reasons {
-            findings.push(workflow_finding("UNIT_PLAN_DISPATCH_DENIED", Some(plan_str.clone()), r.clone(), "Resolve plan blockers, prerequisites, or plan-only intent before dispatch."));
-            errors.push(r);
+    let (plan_kreq, plan_admitted, plan_reasons) = match verify_plan_dispatch_checked(&doc, &args.task) {
+        Ok(v) => v,
+        Err(e) => return emit_tool_error("unit-admit", &e, args.common.as_json),
+    };
+    let (auth_kreq, auth_verdict) = match verify_dispatch_checked(&manifest, &policy_denylist) {
+        Ok(v) => v,
+        Err(e) => return emit_tool_error("unit-admit", &e, args.common.as_json),
+    };
+    let authority_admitted = auth_verdict.admitted;
+    let cert = if args.common.certify || args.common.emit_proof.is_some() {
+        let (o1, o2) = (CertObligation::PlanDispatch(plan_kreq), CertObligation::Authority(auth_kreq));
+        match certify_pair(&o1, &o2, args.common.emit_proof.as_deref()) {
+            Ok(c) => Some(c),
+            Err(e) => return emit_tool_error("unit-admit", &e, args.common.as_json),
         }
+    } else {
+        None
+    };
+    let admitted = plan_admitted && authority_admitted && cert.as_ref().is_none_or(|c| c.certified);
+    let plan_str = args.plan.to_string_lossy().into_owned();
+    let (mut errors, mut findings) = (Vec::new(), Vec::new());
+    for r in plan_reasons {
+        findings.push(workflow_finding("UNIT_PLAN_DISPATCH_DENIED", Some(plan_str.clone()), r.clone(), "Resolve plan blockers, prerequisites, or plan-only intent before dispatch."));
+        errors.push(r);
     }
-    if let Err(reason) = auth_res {
+    if !authority_admitted {
+        let reason = auth_verdict.reasons.join("; ");
         findings.push(workflow_finding("UNIT_AUTHORITY_DENIED", Some(plan_str.clone()), reason.clone(), "Adjust role, tier, retry count, model policy, or reviewer independence."));
         errors.push(reason);
     }
@@ -396,19 +391,21 @@ fn handle_unit_admit(args: UnitAdmitArgs) -> i32 {
     meta.insert("admitted".into(), json!(admitted));
     meta.insert("plan_admitted".into(), json!(plan_admitted));
     meta.insert("authority_admitted".into(), json!(authority_admitted));
-    let (receipt_sha, receipt_error) = record_workflow_receipt(
-        &repo_root, &spec, "unit-admit", &args.common.surface, args.common.no_receipt,
-        exit_code, dur_ms, &findings, std::slice::from_ref(&plan_str), meta,
-    );
-    let report = json!({
+    let mut report = json!({
         "command": "unit-admit", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
         "plan": plan_str, "task": args.task, "role": role.as_str(), "tier": tier.as_str(),
         "status": if admitted { "PASS" } else { "FAIL" }, "exit_code": exit_code,
         "duration_ms": dur_ms as u64, "admitted": admitted, "plan_admitted": plan_admitted,
         "authority_admitted": authority_admitted, "errors": errors, "findings": findings,
         "contract_enabled": spec.workflow.contract_enabled("authority"),
-        "receipt_sha256": receipt_sha, "receipt_error": receipt_error,
     });
+    attach_attestation(&mut meta, &mut report, cert.as_ref());
+    let (receipt_sha, receipt_error) = record_workflow_receipt(
+        &repo_root, &spec, "unit-admit", &args.common.surface, args.common.no_receipt,
+        exit_code, dur_ms, &findings, std::slice::from_ref(&plan_str), meta,
+    );
+    report["receipt_sha256"] = json!(receipt_sha);
+    report["receipt_error"] = json!(receipt_error);
     let mut lines = vec![format!(
         "birkin unit admit ({}): task={} role={} tier={} status={} errors={} ({dur_ms}ms)",
         spec.project.name, args.task, role.as_str(), tier.as_str(),
@@ -479,7 +476,10 @@ fn handle_unit_verify_scope(args: UnitVerifyScopeArgs) -> i32 {
             Err(e) => return emit_tool_error("unit-verify-scope", &e, args.as_json),
         }
     };
-    let mut outcome = verify_task_scope(&repo_root, task, &changed_paths, auth, &active_units);
+    let (mut outcome, scope_kreq) = match verify_task_scope_checked(&repo_root, task, &changed_paths, auth, &active_units) {
+        Ok(v) => v,
+        Err(e) => return emit_tool_error("unit-verify-scope", &e, args.as_json),
+    };
     if let Some(ref declared_root) = task.checkout_root {
         let declared_canon = fs::canonicalize(declared_root).ok();
         let actual_canon = fs::canonicalize(&repo_root).ok();
@@ -492,31 +492,38 @@ fn handle_unit_verify_scope(args: UnitVerifyScopeArgs) -> i32 {
             ));
         }
     }
-    let exit_code = if outcome.admitted { EXIT_PASS } else { EXIT_STATIC };
+    let cert = match maybe_certify(args.certify, args.emit_proof.as_deref(), CertObligation::Scope(scope_kreq)) {
+        Ok(c) => c,
+        Err(e) => return emit_tool_error("unit-verify-scope", &e, args.as_json),
+    };
+    let admitted = outcome.admitted && cert.as_ref().is_none_or(|c| c.certified);
+    let exit_code = if admitted { EXIT_PASS } else { EXIT_STATIC };
     let dur_ms = t0.elapsed().as_millis();
     let mut meta = Map::new();
     meta.insert("plan".into(), json!(args.plan.to_string_lossy()));
     meta.insert("task".into(), json!(args.task));
     meta.insert("authority".into(), json!(auth_label));
     meta.insert("staged_only".into(), json!(args.staged));
-    meta.insert("admitted".into(), json!(outcome.admitted));
+    meta.insert("admitted".into(), json!(admitted));
+    let mut report = json!({
+        "command": "unit-verify-scope", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
+        "plan": args.plan.to_string_lossy(), "task": args.task, "authority": auth_label,
+        "staged_only": args.staged, "status": if admitted { "PASS" } else { "FAIL" },
+        "exit_code": exit_code, "duration_ms": dur_ms as u64, "admitted": admitted,
+        "checked_paths": changed_paths, "decisions": outcome.decisions,
+        "overlapping_writes": outcome.overlapping_writes, "findings": outcome.findings,
+        "contract_enabled": spec.workflow.contract_enabled("scope"),
+    });
+    attach_attestation(&mut meta, &mut report, cert.as_ref());
     let (receipt_sha, receipt_error) = record_workflow_receipt(
         &repo_root, &spec, "unit-verify-scope", &args.surface, args.no_receipt,
         exit_code, dur_ms, &outcome.findings, &changed_paths, meta,
     );
-    let report = json!({
-        "command": "unit-verify-scope", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
-        "plan": args.plan.to_string_lossy(), "task": args.task, "authority": auth_label,
-        "staged_only": args.staged, "status": if outcome.admitted { "PASS" } else { "FAIL" },
-        "exit_code": exit_code, "duration_ms": dur_ms as u64, "admitted": outcome.admitted,
-        "checked_paths": changed_paths, "decisions": outcome.decisions,
-        "overlapping_writes": outcome.overlapping_writes, "findings": outcome.findings,
-        "contract_enabled": spec.workflow.contract_enabled("scope"),
-        "receipt_sha256": receipt_sha, "receipt_error": receipt_error,
-    });
+    report["receipt_sha256"] = json!(receipt_sha);
+    report["receipt_error"] = json!(receipt_error);
     let mut lines = vec![format!(
         "birkin unit verify-scope ({}): task={} status={} checked={} findings={} ({dur_ms}ms)",
-        spec.project.name, args.task, if outcome.admitted { "PASS" } else { "FAIL" },
+        spec.project.name, args.task, if admitted { "PASS" } else { "FAIL" },
         changed_paths.len(), outcome.findings.len()
     )];
     lines.extend(format_findings(&outcome.findings));
@@ -539,9 +546,16 @@ fn handle_review_closure_verify(state_path: &Path, common: &WorkflowRepoArgs) ->
         Err(e) => return emit_tool_error("review-closure-verify", &format!("Invalid review state JSON in {}: {e}", state_path.display()), common.as_json),
     };
     let state_str = state_path.to_string_lossy().into_owned();
-    let res = verify_review_closure(&doc);
-    let closed = res.is_ok();
-    let error = res.err();
+    let (rc_kreq, rc_verdict) = match verify_review_closure_checked(&doc) {
+        Ok(v) => v,
+        Err(e) => return emit_tool_error("review-closure-verify", &e, common.as_json),
+    };
+    let cert = match maybe_certify(common.certify, common.emit_proof.as_deref(), CertObligation::ReviewClosure(rc_kreq)) {
+        Ok(c) => c,
+        Err(e) => return emit_tool_error("review-closure-verify", &e, common.as_json),
+    };
+    let closed = rc_verdict.admitted && cert.as_ref().is_none_or(|c| c.certified);
+    let error = if closed { None } else { Some(rc_verdict.reasons.join("; ")) };
     let mut findings = Vec::new();
     if let Some(ref msg) = error {
         findings.push(workflow_finding("REVIEW_CLOSURE_VIOLATION", Some(state_str.clone()), msg.clone(), "Classify, reply with URL where resolved, verify must_fix items, and clear clarifications."));
@@ -553,18 +567,20 @@ fn handle_review_closure_verify(state_path: &Path, common: &WorkflowRepoArgs) ->
     meta.insert("item_count".into(), json!(doc.canonical_review_items.len()));
     meta.insert("request_re_review".into(), json!(doc.request_re_review));
     meta.insert("closed".into(), json!(closed));
-    let (receipt_sha, receipt_error) = record_workflow_receipt(
-        &repo_root, &spec, "review-closure-verify", &common.surface, common.no_receipt,
-        exit_code, dur_ms, &findings, std::slice::from_ref(&state_str), meta,
-    );
-    let report = json!({
+    let mut report = json!({
         "command": "review-closure-verify", "project": spec.project.name, "repo": repo_root.to_string_lossy(),
         "state_file": state_str, "item_count": doc.canonical_review_items.len(),
         "request_re_review": doc.request_re_review, "status": if closed { "PASS" } else { "FAIL" },
         "exit_code": exit_code, "duration_ms": dur_ms as u64, "closed": closed, "error": error,
         "findings": findings, "contract_enabled": spec.workflow.contract_enabled("review_closure"),
-        "receipt_sha256": receipt_sha, "receipt_error": receipt_error,
     });
+    attach_attestation(&mut meta, &mut report, cert.as_ref());
+    let (receipt_sha, receipt_error) = record_workflow_receipt(
+        &repo_root, &spec, "review-closure-verify", &common.surface, common.no_receipt,
+        exit_code, dur_ms, &findings, std::slice::from_ref(&state_str), meta,
+    );
+    report["receipt_sha256"] = json!(receipt_sha);
+    report["receipt_error"] = json!(receipt_error);
     let mut lines = vec![format!(
         "birkin review-closure verify ({}): items={} re_review={} status={} ({dur_ms}ms)",
         spec.project.name, doc.canonical_review_items.len(), doc.request_re_review,

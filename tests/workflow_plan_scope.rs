@@ -4,13 +4,13 @@
 
 mod common;
 
+use birkin::lean_kernel::{eval_scope, KernelPathDecision, KernelScopeRequest};
 use birkin::plan_contract::{
     can_dispatch_mutating, is_valid_scoped_path, load_plan_document, validate_plan_document,
 };
 use birkin::project_models::load_project_spec;
 use birkin::scope_contract::{
-    collect_git_changed_paths, path_admitted_bool, verify_task_scope, write_paths_overlap,
-    PathAuthority, ScopeOutcome,
+    collect_git_changed_paths, verify_task_scope, PathAuthority, ScopeOutcome,
 };
 use birkin::workflow_models::{
     ActiveUnitRecord, PlanDocument, PlanQuestionSpec, PlanTaskSpec, PlanVerificationSpec,
@@ -467,30 +467,29 @@ fn scope_engine_enforces_real_tree_boundaries() {
         .admitted
     );
 
-    assert!(write_paths_overlap("src", "src/a.rs") && write_paths_overlap("src/a.rs", "src/"));
-    assert!(
-        !write_paths_overlap("src/a.rs", "src/a.rs.bak") && !write_paths_overlap("src", "srcs/a")
-    );
+    let overlaps = |a: &str, b: &str| {
+        !eval_scope(&KernelScopeRequest { authority: "source".into(), decisions: vec![], my_writes: vec![a.into()], other_active_writes: vec![b.into()] })
+            .unwrap()
+            .overlapping_writes
+            .is_empty()
+    };
+    assert!(overlaps("src", "src/a.rs") && overlaps("src/a.rs", "src/"));
+    assert!(!overlaps("src/a.rs", "src/a.rs.bak") && !overlaps("src", "srcs/a"));
 }
 
 #[test]
 fn diff_scope_decisions_match_lean() {
-    let mut queries = Vec::new();
-    let mut rust = Vec::new();
-
-    // Exhaustive decision table for a single path, with and without a conflicting writer.
-    let authorities = [
-        (PathAuthority::SourceEdit, "source"),
-        (PathAuthority::VerificationOutput, "verification_output"),
-    ];
+    let (mut queries, mut rust) = (Vec::new(), Vec::new());
+    let authorities = [(PathAuthority::SourceEdit, "source"), (PathAuthority::VerificationOutput, "verification_output")];
     for (auth, auth_name) in authorities {
         for mask in 0..16u8 {
-            let flags = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0, mask & 8 != 0];
-            let admitted = path_admitted_bool(auth, flags[0], flags[1], flags[2], flags[3]);
-            let decision = flags.map(bit).join(",");
-            for (other, overlap) in [("-", false), ("b", false), ("a", true), ("b|a", true)] {
+            let f = [mask & 1 != 0, mask & 2 != 0, mask & 4 != 0, mask & 8 != 0];
+            let kdec = KernelPathDecision { inside_root: f[0], matched_allowed: f[1], matched_forbidden: f[2], matched_verify_output: f[3] };
+            let decision = f.map(bit).join(",");
+            for (other, ow) in [("-", vec![]), ("b", vec!["b".into()]), ("a", vec!["a".into()]), ("b|a", vec!["b".into(), "a".into()])] {
+                let req = KernelScopeRequest { authority: auth.as_wire().into(), decisions: vec![kdec.clone()], my_writes: vec!["a".into()], other_active_writes: ow };
                 queries.push(format!("scope_admit {auth_name} {decision} a {other}"));
-                rust.push(admitted && !overlap);
+                rust.push(eval_scope(&req).unwrap().verdict.admitted);
             }
         }
     }

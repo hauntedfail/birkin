@@ -1,5 +1,10 @@
 //! Lifecycle admission, runner evidence and read-only Sawyer Git verification.
+//!
+//! Rust parses test transcripts, toolchain pins, and Git/Sawyer state; lifecycle stage
+//! admission verdicts are computed directly by the Lean 4 decision kernel
+//! (`BirkinSpec.StageAdmission`).
 
+use crate::lean_kernel::{eval_stage, KernelStageRequest, KernelVerdict};
 use crate::workflow_models::{LifecycleStage, SawyerContextPack, StageEvidenceInput};
 use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet};
@@ -7,29 +12,56 @@ use std::fs;
 use std::path::{Component, Path};
 use std::process::{Command, Output};
 
-pub fn stage_admitted(stage: LifecycleStage, ev: &StageEvidenceInput) -> bool {
-    use LifecycleStage::*;
-    let verified = ev.tree_bound_ok
-        && ev.receipt_chain_ok
-        && ev.toolchain_matched
-        && ev.discovered_tests > 0
-        && ev.executed_tests >= ev.discovered_tests;
-    let reviewed = verified && ev.review_passed;
-    let committed = reviewed
-        && ev.sawyer_staged_exact
-        && ev.sawyer_excluded_clean
-        && (!ev.gpg_sign_required || ev.gpg_sig_valid);
-    let pushed = committed && ev.remote_head_matches;
-    let ci = pushed && ev.ci_passed;
+fn stage_wire(stage: LifecycleStage) -> &'static str {
     match stage {
-        Implemented => ev.tree_bound_ok,
-        Verified => verified,
-        Reviewed => reviewed,
-        Committed => committed,
-        Pushed => pushed,
-        CiPassed => ci,
-        Released => ci && ev.release_authorized,
+        LifecycleStage::Implemented => "implemented",
+        LifecycleStage::Verified => "verified",
+        LifecycleStage::Reviewed => "reviewed",
+        LifecycleStage::Committed => "committed",
+        LifecycleStage::Pushed => "pushed",
+        LifecycleStage::CiPassed => "ci_passed",
+        LifecycleStage::Released => "released",
     }
+}
+
+/// Build the Lean 4 kernel request for lifecycle stage admission and certification.
+pub fn build_stage_kernel_request(
+    stage: LifecycleStage,
+    ev: &StageEvidenceInput,
+) -> KernelStageRequest {
+    KernelStageRequest {
+        stage: stage_wire(stage).into(),
+        discovered_tests: ev.discovered_tests,
+        executed_tests: ev.executed_tests,
+        toolchain_matched: ev.toolchain_matched,
+        receipt_chain_ok: ev.receipt_chain_ok,
+        tree_bound_ok: ev.tree_bound_ok,
+        review_passed: ev.review_passed,
+        sawyer_staged_exact: ev.sawyer_staged_exact,
+        sawyer_excluded_clean: ev.sawyer_excluded_clean,
+        gpg_sign_required: ev.gpg_sign_required,
+        gpg_sig_valid: ev.gpg_sig_valid,
+        remote_head_matches: ev.remote_head_matches,
+        ci_passed: ev.ci_passed,
+        release_authorized: ev.release_authorized,
+    }
+}
+
+/// Evaluate stage admission via the Lean 4 decision kernel, returning `Err` on kernel failure.
+pub fn verify_stage_admission(
+    stage: LifecycleStage,
+    ev: &StageEvidenceInput,
+) -> Result<(KernelStageRequest, KernelVerdict), String> {
+    let kreq = build_stage_kernel_request(stage, ev);
+    let verdict = eval_stage(&kreq)?;
+    Ok((kreq, verdict))
+}
+
+/// Fail-closed boolean wrapper delegating directly to the Lean 4 decision kernel.
+pub fn stage_admitted(stage: LifecycleStage, ev: &StageEvidenceInput) -> bool {
+    verify_stage_admission(stage, ev)
+        .map(|(_, v)| v.admitted)
+        .unwrap_or(false)
 }
 
 fn relative_file(name: &str) -> bool {

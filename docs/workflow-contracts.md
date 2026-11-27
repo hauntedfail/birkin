@@ -8,9 +8,16 @@ Birkin divides workflow enforcement into three decoupled layers so that universa
 
 | Layer | Location | Responsibility |
 | --- | --- | --- |
-| **1. Universal Lean 4 Kernel** | [lean/BirkinSpec.lean](../lean/BirkinSpec.lean) & [lean/BirkinSpec/Oracle.lean](../lean/BirkinSpec/Oracle.lean) | Proves core decision invariants in Lean 4 with zero `sorry`, zero `native_decide`, and standard axioms only (`propext`, `Classical.choice`, `Quot.sound`). Compiled into `birkin-oracle` and differential-tested against Rust in [tests/lean_oracle_diff.rs](../tests/lean_oracle_diff.rs). |
+| **1. Single-Source Lean 4 Kernel** | [lean/BirkinSpec.lean](../lean/BirkinSpec.lean), [lean/BirkinSpec/Diagnostics.lean](../lean/BirkinSpec/Diagnostics.lean) & [lean/BirkinSpec/Kernel.lean](../lean/BirkinSpec/Kernel.lean) | Proves all five workflow contract invariants and diagnostic equivalence theorems in Lean 4 with zero `sorry`, zero `native_decide`, and standard axioms only (`propext`, `Classical.choice`, `Quot.sound`). Executed directly in production via Mode A (`birkin-kernel`, ~10 ms standalone binary, fail-closed with zero Rust mirrors) and Mode B (`--certify`, ~0.3 s Lean kernel type-check + `#print axioms` audit). |
 | **2. Per-Repository Opt-In Binding** | [.birkin/config.yaml](../.birkin/config.yaml) (`workflow:` + `proofs:`) | Each repository enables only the contracts, toolchain pin files, test-runner parsers, Sawyer exclusion whitelists, service build guards, and domain-specific Lean proofs it needs. Configs without a `workflow:` section remain 100% backward compatible. |
 | **3. Thin Cross-Client Adapters** | [src/client_sync.rs](../src/client_sync.rs) (`birkin sync`) | Renders deterministic, version- and SHA-256-stamped shims for Git, Claude Code, Hermes, and shared workflow skills so every client invokes the same native `birkin` binary. Drift across clients is detected via `birkin sync --check`. |
+
+### Mode A (`birkin-kernel`) vs Mode B (`--certify`)
+
+Both modes share the exact same Lean 4 specification (`BirkinSpec`) with zero hand-written Rust decision mirrors:
+
+- **Mode A (default, `verification_mode: "lean_kernel"`):** Rust extracts OS/JSON/Git facts and queries the compiled standalone `birkin-kernel` executable over JSON (`--serve` / single-shot). Missing or malformed kernel responses exit `5` (`EXIT_TOOL_ERROR`).
+- **Mode B (`--certify [--emit-proof <path>]`, `verification_mode: "lean_certified"`):** For milestone gates (commit, push, release, CI), Birkin deterministically emits a `.lean` proof certificate for the concrete extracted facts, runs `lean` directly against prebuilt `BirkinSpec` `.olean` libraries, audits `#print axioms`, and records `proof_sha256` and `kernel_axioms` in both JSON output and the hash-chained receipt ledger.
 
 ### Per-Repository Configuration (`workflow:` + `proofs:`)
 

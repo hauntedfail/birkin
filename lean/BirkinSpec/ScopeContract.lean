@@ -33,9 +33,22 @@ def pathAdmitted (auth : PathAuthority) (d : PathDecision) : Bool :=
 def allPathsAdmitted (auth : PathAuthority) (ds : List PathDecision) : Bool :=
   ds.all (pathAdmitted auth)
 
-/-- The oracle receives resolved checkout-relative paths. A final slash may mark a directory. -/
+/-- Structural list-based component splitting so `scopeAdmitted` reduces directly inside
+    the Lean 4 kernel (`by decide`) with zero opaque runtime string primitives. -/
+private def dropTrailingSlashes (cs : List Char) : List Char :=
+  (cs.reverse.dropWhile (· == '/')).reverse
+
+private def splitSlashAux (cur : List Char) : List Char → List String
+  | [] => [String.ofList cur.reverse]
+  | c :: rest =>
+    if c == '/' then
+      String.ofList cur.reverse :: splitSlashAux [] rest
+    else
+      splitSlashAux (c :: cur) rest
+
+/-- The kernel receives resolved checkout-relative paths. A final slash may mark a directory. -/
 def writeComponents (p : String) : List String :=
-  (p.dropEndWhile '/').toString.splitOn "/"
+  splitSlashAux [] (dropTrailingSlashes p.toList)
 
 def writePathsOverlap (p q : String) : Bool :=
   (writeComponents p).isPrefixOf (writeComponents q) ||
