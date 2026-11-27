@@ -19,7 +19,7 @@ Imports may only point downward; `birkin check` enforces this mechanically, `bir
 1. **core**: `constants.rs`, `glob.rs` (no internal imports)
 2. **models**: `models.rs`, `project_models.rs`, `proof_models.rs`, `workflow_models.rs` -> `core`
 3. **utils**: `config_utils.rs`, `imports_parser.rs`, `lean_kernel.rs`, `ledger.rs` -> `core`, `models`
-4. **engines**: `static_check.rs`, `live.rs`, `drift.rs`, `guides.rs`, `lean_certify.rs`, `project_init.rs`, `prove.rs`, `prove_audit.rs`, `prove_lean.rs`, `sensors.rs`, `semantic.rs`, `verify.rs`, `plan_contract.rs`, `scope_contract.rs`, `authority_contract.rs`, `stage_contract.rs`, `review_closure.rs` -> `core`, `models`, `utils`
+4. **engines**: `static_check.rs`, `live.rs`, `model_sync.rs`, `drift.rs`, `guides.rs`, `lean_certify.rs`, `project_init.rs`, `prove.rs`, `prove_audit.rs`, `prove_lean.rs`, `sensors.rs`, `semantic.rs`, `verify.rs`, `plan_contract.rs`, `scope_contract.rs`, `authority_contract.rs`, `stage_contract.rs`, `review_closure.rs` -> `core`, `models`, `utils`
 5. **orchestration**: `client_sync.rs`, `gc.rs`, `steer.rs`, `hooks.rs`, `report.rs` -> `core`, `models`, `utils`, `engines`
 6. **cli**: `cli.rs`, `project_cli.rs`, `ops_cli.rs`, `workflow_cli.rs`, `workflow_stage_cli.rs`, `lib.rs`, `main.rs` -> lower layers
 

@@ -12,11 +12,150 @@ use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Duration;
 
-const TRANSIENT_HTTP_CODES: &[u16] = &[429, 500, 502, 503, 504];
+pub(crate) fn is_transient_http(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
+}
 
-fn advertised_context_length(mobj: &Map<String, Value>) -> Option<u64> {
+pub(crate) fn advertised_context_length(mobj: &Map<String, Value>) -> Option<u64> {
     as_positive_int(mobj.get("context_length"))
         .or_else(|| as_positive_int(mobj.get("max_model_len")))
+}
+
+pub(crate) struct FetchedCatalog {
+    pub endpoint: String,
+    pub http_status: u16,
+    pub catalog: BTreeMap<String, Map<String, Value>>,
+    pub catalog_sha256: String,
+}
+
+pub(crate) struct CatalogFetchError {
+    pub exit_code: i32,
+    pub endpoint: String,
+    pub http_status: Option<u16>,
+    pub finding: Finding,
+}
+
+pub(crate) fn fetch_models_catalog(
+    base_url: &str,
+    api_key: &str,
+    timeout_secs: f64,
+) -> Result<FetchedCatalog, Box<CatalogFetchError>> {
+    let models_url = format!("{base_url}/models");
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs_f64(timeout_secs.max(0.5)))
+        .build();
+
+    let mut req = agent.get(&models_url);
+    if !api_key.is_empty() {
+        req = req.set("Authorization", &format!("Bearer {api_key}"));
+    }
+
+    let (status, body_text) = match req.call() {
+        Ok(resp) => {
+            let st = resp.status();
+            let txt = resp.into_string().unwrap_or_default();
+            (st, txt)
+        }
+        Err(ureq::Error::Status(code, resp)) => {
+            let txt = resp.into_string().unwrap_or_default();
+            (code, txt)
+        }
+        Err(ureq::Error::Transport(err)) => {
+            return Err(Box::new(CatalogFetchError {
+                exit_code: EXIT_LIVE_TRANSIENT,
+                endpoint: models_url.clone(),
+                http_status: None,
+                finding: live_finding(
+                    "LIVE_NETWORK_UNAVAILABLE",
+                    format!("HTTP transport error reaching {models_url}: {err}"),
+                    "Check network connectivity and upstream gateway availability.".into(),
+                    BTreeMap::new(),
+                ),
+            }));
+        }
+    };
+
+    if is_transient_http(status) {
+        let mut details = BTreeMap::new();
+        details.insert("status_code".into(), json!(status));
+        return Err(Box::new(CatalogFetchError {
+            exit_code: EXIT_LIVE_TRANSIENT,
+            endpoint: models_url.clone(),
+            http_status: Some(status),
+            finding: live_finding(
+                "LIVE_TRANSIENT_HTTP",
+                format!("GET {models_url} returned transient HTTP {status}."),
+                "Retry later; do not treat transient outage as config corruption.".into(),
+                details,
+            ),
+        }));
+    }
+    if status != 200 {
+        let mut details = BTreeMap::new();
+        details.insert("status_code".into(), json!(status));
+        return Err(Box::new(CatalogFetchError {
+            exit_code: EXIT_LIVE_CONTRACT,
+            endpoint: models_url.clone(),
+            http_status: Some(status),
+            finding: live_finding(
+                "LIVE_CATALOG_HTTP_ERROR",
+                format!("GET {models_url} returned HTTP {status}."),
+                "Verify base_url and API key credentials.".into(),
+                details,
+            ),
+        }));
+    }
+
+    let body: Value = match serde_json::from_str(&body_text) {
+        Ok(v) => v,
+        Err(err) => {
+            return Err(Box::new(CatalogFetchError {
+                exit_code: EXIT_LIVE_CONTRACT,
+                endpoint: models_url.clone(),
+                http_status: Some(status),
+                finding: live_finding(
+                    "LIVE_CATALOG_INVALID_JSON",
+                    format!("GET {models_url} returned invalid JSON: {err}"),
+                    "Verify endpoint serves OpenAI-compatible JSON.".into(),
+                    BTreeMap::new(),
+                ),
+            }));
+        }
+    };
+
+    let Some(data_arr) = body.get("data").and_then(Value::as_array) else {
+        return Err(Box::new(CatalogFetchError {
+            exit_code: EXIT_LIVE_CONTRACT,
+            endpoint: models_url.clone(),
+            http_status: Some(status),
+            finding: live_finding(
+                "LIVE_CATALOG_SCHEMA_INVALID",
+                format!("GET {models_url} response missing 'data' list."),
+                "Verify upstream endpoint implements OpenAI /v1/models schema.".into(),
+                BTreeMap::new(),
+            ),
+        }));
+    };
+
+    let mut catalog: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
+    for item in data_arr {
+        if let Some(obj) = item.as_object() {
+            let id = get_str(obj, "id");
+            if !id.is_empty() {
+                catalog.insert(id.to_string(), obj.clone());
+            }
+        }
+    }
+    let catalog_ids: Vec<&String> = catalog.keys().collect();
+    let hash_payload = serde_json::to_string(&catalog_ids).unwrap_or_default();
+    let catalog_sha256 = sha256_hex(hash_payload.as_bytes());
+
+    Ok(FetchedCatalog {
+        endpoint: models_url,
+        http_status: status,
+        catalog,
+        catalog_sha256,
+    })
 }
 
 fn collect_probe_models(
@@ -107,100 +246,28 @@ pub fn verify_live(
         return (EXIT_LIVE_CONTRACT, findings, meta);
     }
 
-    let models_url = format!("{base_url}/models");
-    meta.insert("endpoint".into(), json!(models_url));
     let timeout_secs = timeout_override.unwrap_or(policy.live_contract.timeout_seconds);
+    let fetched = match fetch_models_catalog(&base_url, &api_key, timeout_secs) {
+        Ok(f) => f,
+        Err(err) => {
+            meta.insert("endpoint".into(), json!(err.endpoint));
+            if let Some(st) = err.http_status {
+                meta.insert("http_status".into(), json!(st));
+            }
+            findings.push(err.finding);
+            return (err.exit_code, findings, meta);
+        }
+    };
+
+    let models_url = fetched.endpoint;
+    meta.insert("endpoint".into(), json!(models_url));
+    meta.insert("http_status".into(), json!(fetched.http_status));
+    let catalog = fetched.catalog;
+    meta.insert("catalog_count".into(), json!(catalog.len()));
+    meta.insert("catalog_sha256".into(), json!(fetched.catalog_sha256));
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs_f64(timeout_secs.max(0.5)))
         .build();
-
-    let mut req = agent.get(&models_url);
-    if !api_key.is_empty() {
-        req = req.set("Authorization", &format!("Bearer {api_key}"));
-    }
-
-    let (status, body_text) = match req.call() {
-        Ok(resp) => {
-            let st = resp.status();
-            let txt = resp.into_string().unwrap_or_default();
-            (st, txt)
-        }
-        Err(ureq::Error::Status(code, resp)) => {
-            let txt = resp.into_string().unwrap_or_default();
-            (code, txt)
-        }
-        Err(ureq::Error::Transport(err)) => {
-            findings.push(live_finding(
-                "LIVE_NETWORK_UNAVAILABLE",
-                format!("HTTP transport error reaching {models_url}: {err}"),
-                "Check network connectivity and upstream gateway availability.".into(),
-                BTreeMap::new(),
-            ));
-            return (EXIT_LIVE_TRANSIENT, findings, meta);
-        }
-    };
-
-    meta.insert("http_status".into(), json!(status));
-    if TRANSIENT_HTTP_CODES.contains(&status) {
-        let mut details = BTreeMap::new();
-        details.insert("status_code".into(), json!(status));
-        findings.push(live_finding(
-            "LIVE_TRANSIENT_HTTP",
-            format!("GET {models_url} returned transient HTTP {status}."),
-            "Retry later; do not treat transient outage as config corruption.".into(),
-            details,
-        ));
-        return (EXIT_LIVE_TRANSIENT, findings, meta);
-    }
-    if status != 200 {
-        let mut details = BTreeMap::new();
-        details.insert("status_code".into(), json!(status));
-        findings.push(live_finding(
-            "LIVE_CATALOG_HTTP_ERROR",
-            format!("GET {models_url} returned HTTP {status}."),
-            "Verify base_url and API key credentials.".into(),
-            details,
-        ));
-        return (EXIT_LIVE_CONTRACT, findings, meta);
-    }
-
-    let body: Value = match serde_json::from_str(&body_text) {
-        Ok(v) => v,
-        Err(err) => {
-            findings.push(live_finding(
-                "LIVE_CATALOG_INVALID_JSON",
-                format!("GET {models_url} returned invalid JSON: {err}"),
-                "Verify endpoint serves OpenAI-compatible JSON.".into(),
-                BTreeMap::new(),
-            ));
-            return (EXIT_LIVE_CONTRACT, findings, meta);
-        }
-    };
-
-    let Some(data_arr) = body.get("data").and_then(Value::as_array) else {
-        findings.push(live_finding(
-            "LIVE_CATALOG_SCHEMA_INVALID",
-            format!("GET {models_url} response missing 'data' list."),
-            "Verify upstream endpoint implements OpenAI /v1/models schema.".into(),
-            BTreeMap::new(),
-        ));
-        return (EXIT_LIVE_CONTRACT, findings, meta);
-    };
-
-    let mut catalog: BTreeMap<String, Map<String, Value>> = BTreeMap::new();
-    for item in data_arr {
-        if let Some(obj) = item.as_object() {
-            let id = get_str(obj, "id");
-            if !id.is_empty() {
-                catalog.insert(id.to_string(), obj.clone());
-            }
-        }
-    }
-
-    meta.insert("catalog_count".into(), json!(catalog.len()));
-    let catalog_ids: Vec<&String> = catalog.keys().collect();
-    let hash_payload = serde_json::to_string(&catalog_ids).unwrap_or_default();
-    meta.insert("catalog_sha256".into(), json!(sha256_hex(hash_payload.as_bytes())));
 
     let provider_models = resolve_provider_models(provider_block);
 
@@ -336,7 +403,7 @@ pub fn verify_live(
                         }
                     }
                 }
-                Err(ureq::Error::Status(code, _)) if TRANSIENT_HTTP_CODES.contains(&code) => {
+                Err(ureq::Error::Status(code, _)) if is_transient_http(code) => {
                     let mut details = BTreeMap::new();
                     details.insert("model".into(), json!(pm));
                     details.insert("status_code".into(), json!(code));

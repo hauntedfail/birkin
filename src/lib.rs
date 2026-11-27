@@ -4,7 +4,7 @@
 //!   0. core: constants, glob
 //!   1. models: models, project_models, proof_models, workflow_models
 //!   2. utils: config_utils, imports_parser, ledger
-//!   3. engines: static_check, live, drift, guides, project_init, prove, prove_audit, prove_lean, sensors, semantic, verify,
+//!   3. engines: static_check, live, model_sync, drift, guides, project_init, prove, prove_audit, prove_lean, sensors, semantic, verify,
 //!      plan_contract, scope_contract, authority_contract, stage_contract, review_closure
 //!   4. orchestration: client_sync, gc, steer, hooks, report
 //!   5. cli: project_cli, ops_cli, workflow_cli, workflow_stage_cli, cli, lib, main
@@ -24,6 +24,7 @@ pub mod lean_certify;
 pub mod lean_kernel;
 pub mod ledger;
 pub mod live;
+pub mod model_sync;
 pub mod models;
 pub mod ops_cli;
 pub mod plan_contract;

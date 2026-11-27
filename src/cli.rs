@@ -6,6 +6,7 @@ use crate::constants::{
 };
 use crate::drift::verify_drift;
 use crate::live::verify_live;
+use crate::model_sync::{format_model_sync_human, sync_provider_models, ModelSyncMode};
 use crate::models::RuntimePolicy;
 use crate::ops_cli::{
     handle_gc, handle_hook_post_edit, handle_hook_pre_commit, handle_hook_pre_complete,
@@ -56,6 +57,22 @@ pub struct HermesCommonArgs {
     pub env: Option<PathBuf>,
     #[arg(long = "json")]
     pub as_json: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct SyncModelsArgs {
+    #[command(flatten)]
+    pub common: HermesCommonArgs,
+    #[arg(long)]
+    pub provider: Option<String>,
+    #[arg(long, conflicts_with = "apply")]
+    pub check: bool,
+    #[arg(long, conflicts_with = "check")]
+    pub apply: bool,
+    #[arg(long)]
+    pub prune: bool,
+    #[arg(long)]
+    pub timeout: Option<f64>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -186,6 +203,9 @@ pub enum Commands {
         #[arg(long)]
         no_write_state: bool,
     },
+    /// [Hermes] Sync provider models and context lengths from upstream /models
+    #[command(name = "sync-models")]
+    SyncModels(SyncModelsArgs),
     /// Hermes Agent runtime verifier namespace
     Hermes {
         #[command(subcommand)]
@@ -267,6 +287,59 @@ pub enum HermesSubcommand {
         #[arg(long)]
         no_write_state: bool,
     },
+    /// Sync provider models and context lengths from upstream /models
+    #[command(name = "sync-models")]
+    SyncModels(SyncModelsArgs),
+}
+
+fn resolve_hermes_env(common: &HermesCommonArgs) -> (PathBuf, PathBuf, PathBuf, Result<RuntimePolicy, String>) {
+    let hermes_home = common.home.clone().unwrap_or_else(default_hermes_home);
+    let config_path = common.config.clone().unwrap_or_else(|| hermes_home.join("config.yaml"));
+    let default_policy = hermes_home.join("birkin-policy.yaml");
+    let env_path = common.env.clone().unwrap_or_else(|| hermes_home.join(".env"));
+    let policy_res = match &common.policy {
+        Some(explicit) if !explicit.exists() => {
+            Err(format!("Explicit policy file not found: {}", explicit.display()))
+        }
+        Some(explicit) => load_policy(explicit),
+        None if default_policy.exists() => load_policy(&default_policy),
+        None => Ok(RuntimePolicy::default()),
+    };
+    (hermes_home, config_path, env_path, policy_res)
+}
+
+fn emit_hermes_tool_error(cmd: &str, err: &str, as_json: bool) -> i32 {
+    if as_json {
+        let body = json!({ "command": cmd, "status": "ERROR", "exit_code": EXIT_TOOL_ERROR, "error": err });
+        eprintln!("{}", serde_json::to_string_pretty(&body).unwrap_or_default());
+    } else {
+        eprintln!("ERROR: {err}");
+    }
+    EXIT_TOOL_ERROR
+}
+
+fn run_sync_models_command(args: &SyncModelsArgs) -> i32 {
+    let (_home, config_path, env_path, policy_res) = resolve_hermes_env(&args.common);
+    let policy = match policy_res {
+        Ok(p) => p,
+        Err(e) => return emit_hermes_tool_error("sync-models", &e, args.common.as_json),
+    };
+    let mode = if args.apply { ModelSyncMode::Apply } else { ModelSyncMode::Check };
+    let report = sync_provider_models(
+        &config_path,
+        Some(&env_path),
+        &policy,
+        args.provider.as_deref(),
+        mode,
+        args.prune,
+        args.timeout,
+    );
+    if args.common.as_json {
+        println!("{}", serde_json::to_string_pretty(&report).unwrap_or_default());
+    } else {
+        println!("{}", format_model_sync_human(&report));
+    }
+    report.exit_code
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -279,46 +352,12 @@ fn run_hermes_command(
     skip_drift: bool,
     no_write_state: bool,
 ) -> i32 {
-    let hermes_home = common.home.clone().unwrap_or_else(default_hermes_home);
-    let config_path = common
-        .config
-        .clone()
-        .unwrap_or_else(|| hermes_home.join("config.yaml"));
-    let default_policy = hermes_home.join("birkin-policy.yaml");
-    let env_path = common
-        .env
-        .clone()
-        .unwrap_or_else(|| hermes_home.join(".env"));
-
+    let (hermes_home, config_path, env_path, policy_res) = resolve_hermes_env(common);
     let cfg_res = load_yaml_mapping(&config_path);
-    let policy_res = match &common.policy {
-        Some(explicit) => {
-            if !explicit.exists() {
-                Err(format!("Explicit policy file not found: {}", explicit.display()))
-            } else {
-                load_policy(explicit)
-            }
-        }
-        None if default_policy.exists() => load_policy(&default_policy),
-        None => Ok(RuntimePolicy::default()),
-    };
 
     let (cfg, policy) = match (cfg_res, policy_res) {
         (Ok(c), Ok(p)) => (c, p),
-        (Err(e), _) | (_, Err(e)) => {
-            let err = json!({
-                "command": cmd,
-                "status": "ERROR",
-                "exit_code": EXIT_TOOL_ERROR,
-                "error": e,
-            });
-            if common.as_json {
-                eprintln!("{}", serde_json::to_string_pretty(&err).unwrap_or_default());
-            } else {
-                eprintln!("ERROR: {e}");
-            }
-            return EXIT_TOOL_ERROR;
-        }
+        (Err(e), _) | (_, Err(e)) => return emit_hermes_tool_error(cmd, &e, common.as_json),
     };
 
     let cfg_sha256 = canonical_config_sha256(&cfg);
@@ -517,6 +556,7 @@ pub fn dispatch(cli: Cli) -> i32 {
             skip_drift,
             no_write_state,
         ),
+        Commands::SyncModels(args) => run_sync_models_command(&args),
         Commands::Hermes { sub } => match sub {
             HermesSubcommand::Static(c) => {
                 run_hermes_command(&c, "static", false, false, None, true, true)
@@ -545,6 +585,7 @@ pub fn dispatch(cli: Cli) -> i32 {
                 skip_drift,
                 no_write_state,
             ),
+            HermesSubcommand::SyncModels(args) => run_sync_models_command(&args),
         },
         Commands::Workflow(cmd) => dispatch_workflow(cmd),
     }

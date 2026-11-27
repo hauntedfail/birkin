@@ -63,6 +63,7 @@ architecture:
         - "src/review_closure.rs"
         - "src/static_check.rs"
         - "src/live.rs"
+        - "src/model_sync.rs"
         - "src/drift.rs"
         - "src/guides.rs"
         - "src/lean_certify.rs"
@@ -205,6 +206,7 @@ invariants:
         - "src/gc.rs"
         - "src/static_check.rs"
         - "src/live.rs"
+        - "src/model_sync.rs"
         - "src/drift.rs"
       pattern: "\\bprintln!\\s*\\("
       severity: error
@@ -242,6 +244,7 @@ semantic:
       predicate: "Does this change silently treat a network error, non-200 HTTP status, or JSON parse failure as a passing verification verdict?"
       globs:
         - "src/live.rs"
+        - "src/model_sync.rs"
         - "src/semantic.rs"
       threshold: 0.75
       action: fix_now
