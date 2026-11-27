@@ -1,5 +1,5 @@
 name = "birkin-spec"
-version = "0.6.0"
+version = "0.7.0"
 defaultTargets = ["BirkinSpec", "birkin-kernel", "birkin-oracle"]
 
 [[lean_lib]]
